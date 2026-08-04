@@ -1,87 +1,64 @@
-import { useState, useRef, useEffect, type CSSProperties } from "react"
+import { useState, useRef, useEffect, useCallback, type CSSProperties } from "react"
 import { Button } from "./components/Button"
 import { BottomNav } from "./components/BottomNav"
+import { Skeleton } from "./components/Skeleton"
+import {
+  createGuestbookEntry,
+  fetchGuestbook,
+  relativeTime,
+  type GuestbookEntry as ApiGuestbookEntry,
+} from "./lib/api"
 
 type NavItem = "upload" | "gallery" | "guestbook"
-type FeedView = "feed" | "empty"
 
 interface GuestbookEntry {
   id: string
   author: string
   message: string
   timestamp: string
-  photoUrl?: string
-  isPending?: boolean
   isOwn?: boolean
 }
 
-const SAMPLE_ENTRIES: GuestbookEntry[] = [
-  {
-    id: "e1",
-    author: "Pak Hendra Kusuma",
-    message:
-      "Selamat menempuh hidup baru, Dinda & Arya! Semoga pernikahan kalian menjadi awal dari babak paling indah dalam hidup, penuh kasih sayang, saling menguatkan, dan selalu dalam lindungan Allah SWT. Kami sekeluarga turut berbahagia hari ini.",
-    timestamp: "2 jam lalu",
-    photoUrl:
-      "https://images.unsplash.com/photo-1623991619299-472ca0f95ef3?w=160&h=160&fit=crop&auto=format",
-  },
-  {
-    id: "e2",
-    author: "Siti Rahayu",
-    message: "Barakallah ya! Semoga sakinah, mawaddah, warahmah. 🌸",
-    timestamp: "3 jam lalu",
-  },
-  {
-    id: "e3",
-    author: "Keluarga Besar Santoso",
-    message:
-      "Kami datang dari Surabaya khusus untuk hari istimewa ini. Dinda, kamu cantik sekali! Arya, jaga Dinda baik-baik ya. Semoga rumah tangga kalian selalu harmonis dan dikaruniai keturunan yang sholeh dan sholeha. Selamat bahagia untuk keluarga baru!",
-    timestamp: "3 jam lalu",
-    photoUrl:
-      "https://images.unsplash.com/photo-1775113512953-fb6960b3a1ea?w=160&h=160&fit=crop&auto=format",
-  },
-  {
-    id: "e4",
-    author: "Rombongan Kantor Dinda",
-    message:
-      "Selamat dari seluruh tim! Kami akan sangat kangen Dinda di kantor minggu ini — nikmati bulan madunya ya 😄 Semoga pernikahan ini membawa kebahagiaan yang tak ternilai untuk kalian berdua.",
-    timestamp: "4 jam lalu",
-  },
-  {
-    id: "e5",
-    author: "Mbak Nisa Amalia",
-    message: "Doa terbaik selalu menyertai kalian. Selamat!",
-    timestamp: "5 jam lalu",
-  },
-  {
-    id: "e6",
-    author: "Ustaz Bagas Santoso",
-    message:
-      "Semoga Allah memberkahi kalian dalam kebahagiaan dan menyatukan kalian dalam kebaikan. Seperti tertulis: 'Dan di antara tanda-tanda kekuasaan-Nya ialah Dia menciptakan untukmu pasangan hidup dari jenismu sendiri, supaya kamu cenderung dan merasa tenteram kepadanya.' (QS. Ar-Rum: 21). Aamiin.",
-    timestamp: "6 jam lalu",
-  },
-]
+function toEntry(entry: ApiGuestbookEntry, isOwn = false): GuestbookEntry {
+  return {
+    id: entry.id,
+    author: entry.author,
+    message: entry.message,
+    timestamp: relativeTime(entry.createdAt),
+    isOwn,
+  }
+}
 
 export default function GuestbookScreen() {
   const [activeNav, setActiveNav] = useState<NavItem>("guestbook")
-  const [feedView, setFeedView] = useState<FeedView>("feed")
-  const [entries, setEntries] = useState<GuestbookEntry[]>(SAMPLE_ENTRIES)
+  const [entries, setEntries] = useState<GuestbookEntry[]>([])
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [sheetOpen, setSheetOpen] = useState(false)
   const [toastMsg, setToastMsg] = useState<string | null>(null)
 
-  function handleSubmit(entry: Omit<GuestbookEntry, "id" | "timestamp" | "isPending" | "isOwn">) {
-    const newEntry: GuestbookEntry = {
-      id: `e-${Date.now()}`,
-      author: entry.author,
-      message: entry.message,
-      photoUrl: entry.photoUrl,
-      timestamp: "Baru saja",
-      isPending: true,
-      isOwn: true,
+  const load = useCallback(async () => {
+    setLoading(true)
+    setLoadError(null)
+    try {
+      const data = await fetchGuestbook()
+      setEntries(data.map(e => toEntry(e)))
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : "Gagal memuat ucapan.")
+    } finally {
+      setLoading(false)
     }
-    setEntries(prev => [newEntry, ...prev])
+  }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  async function handleSubmit(input: { author: string; message: string }) {
+    const created = await createGuestbookEntry(input.author, input.message)
+    setEntries(prev => [toEntry(created, true), ...prev])
     setSheetOpen(false)
-    setToastMsg("Ucapan terkirim dan menunggu persetujuan")
+    setToastMsg("Ucapan terkirim. Terima kasih!")
     setTimeout(() => setToastMsg(null), 6000)
   }
 
@@ -115,24 +92,6 @@ export default function GuestbookScreen() {
               Dinda & Arya · {entries.length} ucapan
             </p>
           </div>
-
-          {/* Demo toggle: feed ↔ empty */}
-          <button
-            onClick={() => setFeedView(v => v === "feed" ? "empty" : "feed")}
-            style={{
-              fontSize: 11,
-              fontFamily: "var(--font-body)",
-              fontWeight: 600,
-              color: "var(--color-ink-500)",
-              backgroundColor: "transparent",
-              border: "1px solid var(--color-ink-300)",
-              borderRadius: "var(--radius-full)",
-              padding: "3px 10px",
-              cursor: "pointer",
-            }}
-          >
-            {feedView === "feed" ? "Kosong" : "Isi"}
-          </button>
         </div>
       </header>
 
@@ -149,7 +108,11 @@ export default function GuestbookScreen() {
           boxSizing: "border-box",
         }}
       >
-        {feedView === "empty" ? (
+        {loading ? (
+          <SkeletonFeed />
+        ) : loadError ? (
+          <FeedError message={loadError} onRetry={load} />
+        ) : entries.length === 0 ? (
           <EmptyFeed onCompose={() => setSheetOpen(true)} />
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -161,7 +124,7 @@ export default function GuestbookScreen() {
       </div>
 
       {/* ── Sticky CTA above bottom nav ── */}
-      {feedView === "feed" && (
+      {!loading && !loadError && (
         <div
           style={{
             position: "fixed",
@@ -276,52 +239,14 @@ function EntryCard({ entry }: { entry: GuestbookEntry }) {
           {entry.author}
         </h3>
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-          {entry.isPending && (
-            <span
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                fontSize: "var(--text-micro-size)",
-                fontWeight: "var(--text-micro-w)",
-                color: "var(--color-warning)",
-                backgroundColor: "rgba(176,118,28,.1)",
-                borderRadius: "var(--radius-full)",
-                padding: "2px 8px",
-                lineHeight: 1.4,
-              }}
-            >
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="12" y1="8" x2="12" y2="12"/>
-                <line x1="12" y1="16" x2="12.01" y2="16"/>
-              </svg>
-              Menunggu
-            </span>
-          )}
           <span style={{ fontSize: "var(--text-caption-size)", color: "var(--color-ink-500)", lineHeight: 1 }}>
             {entry.timestamp}
           </span>
         </div>
       </div>
 
-      {/* Body: optional photo left + message right */}
+      {/* Body: message */}
       <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-        {entry.photoUrl && (
-          <img
-            src={entry.photoUrl}
-            alt={`Foto dari ${entry.author}`}
-            loading="lazy"
-            style={{
-              width: 80,
-              height: 80,
-              borderRadius: "var(--radius-md)",
-              objectFit: "cover",
-              flexShrink: 0,
-              backgroundColor: "var(--color-ink-100)",
-            }}
-          />
-        )}
         <p
           style={{
             margin: 0,
@@ -336,6 +261,62 @@ function EntryCard({ entry }: { entry: GuestbookEntry }) {
         </p>
       </div>
     </article>
+  )
+}
+
+/* ─────────────────────────────────────────
+   LOADING / ERROR STATES
+───────────────────────────────────────── */
+function SkeletonFeed() {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {[0, 1, 2].map(i => (
+        <div
+          key={i}
+          style={{
+            backgroundColor: "var(--color-surface)",
+            borderRadius: "var(--radius-lg)",
+            padding: 20,
+            borderLeft: "2px solid var(--color-primary-100)",
+            boxShadow: "var(--shadow-sm)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+        >
+          <Skeleton height={18} width="40%" />
+          <Skeleton height={14} width="92%" />
+          <Skeleton height={14} width="72%" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function FeedError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div
+      role="alert"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        textAlign: "center",
+        padding: "64px 24px",
+        gap: 16,
+      }}
+    >
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--color-ink-300)" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+        <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+      </svg>
+      <p style={{ margin: 0, fontSize: "var(--text-body-size)", lineHeight: "var(--text-body-lh)", color: "var(--color-ink-500)", maxWidth: "32ch" }}>
+        {message}
+      </p>
+      <Button variant="secondary" size="medium" onClick={onRetry}>
+        Coba Lagi
+      </Button>
+    </div>
   )
 }
 
@@ -410,22 +391,17 @@ function ComposeSheet({
 }: {
   open: boolean
   onClose: () => void
-  onSubmit: (entry: { author: string; message: string; photoUrl?: string }) => void
+  onSubmit: (entry: { author: string; message: string }) => Promise<void>
 }) {
   const [author, setAuthor] = useState("")
   const [message, setMessage] = useState("")
-  const [photoPreview, setPhotoPreview] = useState<string | null>(null)
   const [authorError, setAuthorError] = useState<string | null>(null)
   const [messageError, setMessageError] = useState<string | null>(null)
   const [showValidation, setShowValidation] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
   const authorRef = useRef<HTMLInputElement>(null)
   const sheetRef = useRef<HTMLDivElement>(null)
-  const demoPhotoIdx = useRef(0)
-
-  const DEMO_PHOTOS = [
-    "https://images.unsplash.com/photo-1623991619299-472ca0f95ef3?w=160&h=160&fit=crop&auto=format",
-    "https://images.unsplash.com/photo-1775113512953-fb6960b3a1ea?w=160&h=160&fit=crop&auto=format",
-  ]
 
   // Focus name field when sheet opens
   useEffect(() => {
@@ -435,10 +411,11 @@ function ComposeSheet({
       // Reset on close
       setAuthor("")
       setMessage("")
-      setPhotoPreview(null)
       setAuthorError(null)
       setMessageError(null)
       setShowValidation(false)
+      setSubmitError(null)
+      setSubmitting(false)
     }
   }, [open])
 
@@ -476,15 +453,18 @@ function ComposeSheet({
     return ok
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     setShowValidation(true)
+    setSubmitError(null)
     if (!validate()) return
-    onSubmit({ author: author.trim(), message: message.trim(), photoUrl: photoPreview ?? undefined })
-  }
-
-  function pickDemoPhoto() {
-    setPhotoPreview(DEMO_PHOTOS[demoPhotoIdx.current % DEMO_PHOTOS.length])
-    demoPhotoIdx.current++
+    setSubmitting(true)
+    try {
+      await onSubmit({ author: author.trim(), message: message.trim() })
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : "Gagal mengirim ucapan.")
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const msgLen = message.length
@@ -699,99 +679,29 @@ function ComposeSheet({
             </div>
           </div>
 
-          {/* Optional photo */}
-          <div>
-            {photoPreview ? (
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <img
-                  src={photoPreview}
-                  alt="Foto terlampir"
-                  style={{ width: 80, height: 80, borderRadius: "var(--radius-md)", objectFit: "cover", backgroundColor: "var(--color-ink-100)" }}
-                />
-                <button
-                  onClick={() => setPhotoPreview(null)}
-                  style={{
-                    fontSize: "var(--text-caption-size)",
-                    fontWeight: 600,
-                    color: "var(--color-danger)",
-                    background: "none",
-                    border: "none",
-                    cursor: "pointer",
-                    padding: "4px 0",
-                    fontFamily: "var(--font-body)",
-                  }}
-                >
-                  Hapus foto
-                </button>
-              </div>
-            ) : (
-              <Button variant="secondary" size="medium" icon={<PhotoIcon />} onClick={pickDemoPhoto}>
-                Tambahkan Foto
-              </Button>
-            )}
-          </div>
-
           {/* Submit */}
-          <div style={{ paddingBottom: 4 }}>
-            <Button variant="primary" size="large" fullWidth onClick={handleSubmit}>
-              Kirim Ucapan
+          <div style={{ paddingBottom: 4, display: "flex", flexDirection: "column", gap: 8 }}>
+            {submitError && (
+              <span
+                role="alert"
+                style={{ fontSize: "var(--text-caption-size)", color: "var(--color-danger)", lineHeight: "var(--text-caption-lh)" }}
+              >
+                {submitError}
+              </span>
+            )}
+            <Button
+              variant="primary"
+              size="large"
+              fullWidth
+              loading={submitting}
+              onClick={handleSubmit}
+            >
+              {submitting ? "Mengirim\u2026" : "Kirim Ucapan"}
             </Button>
           </div>
-
-          {/* Show validation error state demo */}
-          <ValidationDemo />
         </div>
       </div>
     </>
-  )
-}
-
-/* ─────────────────────────────────────────
-   VALIDATION DEMO FRAME (inside sheet)
-   Shows the required error state inline so
-   it's visible without having to trigger it.
-───────────────────────────────────────── */
-function ValidationDemo() {
-  return (
-    <div
-      style={{
-        marginTop: 8,
-        padding: 16,
-        backgroundColor: "var(--color-ink-100)",
-        borderRadius: "var(--radius-md)",
-        display: "flex",
-        flexDirection: "column",
-        gap: 6,
-      }}
-    >
-      <p style={{ margin: 0, fontSize: "var(--text-micro-size)", fontWeight: "var(--text-micro-w)", color: "var(--color-ink-500)", textTransform: "uppercase", letterSpacing: "0.07em" }}>
-        Contoh validasi error
-      </p>
-      <label style={{ fontSize: "var(--text-caption-size)", fontWeight: 500, color: "var(--color-ink-700)" }}>
-        Nama Anda <span style={{ color: "var(--color-danger)" }} aria-hidden="true">*</span>
-      </label>
-      <input
-        readOnly
-        value=""
-        placeholder="Contoh: Pak Hendra"
-        aria-invalid="true"
-        style={{
-          ...fieldBase,
-          borderColor: "var(--color-danger)",
-          boxShadow: "0 0 0 3px rgba(168,56,47,.12)",
-          pointerEvents: "none",
-        }}
-      />
-      <span
-        role="alert"
-        style={{ fontSize: "var(--text-caption-size)", color: "var(--color-danger)", lineHeight: "var(--text-caption-lh)", display: "flex", alignItems: "center", gap: 5 }}
-      >
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-        </svg>
-        Nama tidak boleh kosong
-      </span>
-    </div>
   )
 }
 
@@ -819,16 +729,6 @@ function PenIcon() {
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M12 20h9"/>
       <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
-    </svg>
-  )
-}
-
-function PhotoIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="3" y="3" width="18" height="18" rx="2"/>
-      <circle cx="8.5" cy="8.5" r="1.5"/>
-      <polyline points="21 15 16 10 5 21"/>
     </svg>
   )
 }

@@ -1,184 +1,42 @@
 import {
   useState,
   useEffect,
+  useCallback,
   useRef,
   type CSSProperties,
 } from "react"
 import { BottomNav } from "./components/BottomNav"
 import { Button } from "./components/Button"
 import { Skeleton } from "./components/Skeleton"
+import { fetchMedia, relativeTime, type MediaItem } from "./lib/api"
 
 type NavItem = "upload" | "gallery" | "guestbook"
 type Filter = "semua" | "foto" | "video"
 
-interface MediaItem {
-  id: string
-  url: string       // full-res
-  thumb: string     // small, fast
-  lqip: string      // blurred placeholder color
-  w: number
-  h: number
-  uploader: string | null
-  isVideo: boolean
-  duration?: string
-  uploadedAt: string
-  isNew?: boolean
-}
-
-// ── Photo pool ─────────────────────────────────────────────────────
-const PHOTO_IDS = [
-  { id: "1650377509454-1bbd8392e122", w: 4000, h: 6000, up: "Rina Kusuma",     lqip: "#c9bfb0" },
-  { id: "1541700513212-79f419c0221d", w: 5074, h: 3383, up: null,              lqip: "#b8c4b0" },
-  { id: "1650377509488-724221735c19", w: 4000, h: 6000, up: "Pak Hendra",      lqip: "#cfc4b8" },
-  { id: "1623991614441-2b124385eb63", w: 3633, h: 5450, up: "Siti Rahayu",     lqip: "#d4c0a8" },
-  { id: "1757017199822-beab923a1afc", w: 5464, h: 8192, up: null,              lqip: "#e8d8c8" },
-  { id: "1667353931393-7cf46f3d0649", w: 4000, h: 6000, up: "Bagas Santoso",   lqip: "#b0bccc" },
-  { id: "1715911431612-2666e9c5b89a", w: 3456, h: 5184, up: "Keluarga Wahyu",  lqip: "#d8c8b8" },
-  { id: "1715588837113-80441978e93e", w: 3552, h: 5328, up: null,              lqip: "#c8c0b8" },
-  { id: "1749883530206-30804e13c72d", w: 4000, h: 6000, up: "Rombongan Jogja", lqip: "#d0bcac" },
-  { id: "1715911431567-51810f0f0220", w: 3456, h: 5184, up: "Ibu Sari",        lqip: "#c8d0c0" },
-  { id: "1525272149490-82288cb110a0", w: 6000, h: 4000, up: null,              lqip: "#e0d0c0" },
-  { id: "1610604708806-a5c1d7c9bc21", w: 6240, h: 4160, up: "Pak Budi",        lqip: "#bcc8d0" },
-  { id: "1613128517270-f3983564ed8d", w: 3998, h: 6000, up: "Mbak Dewi",       lqip: "#f0e8e0" },
-  { id: "1555041113-88b42409cf7f",    w: 3264, h: 4896, up: null,              lqip: "#d8c8c0" },
-  { id: "1613128518101-e15cf2fdc7d7", w: 6000, h: 4000, up: "Keluarga Santoso",lqip: "#e8dcd0" },
-  { id: "1715588837150-c66c33f055f8", w: 6233, h: 9350, up: "Nisa Amalia",     lqip: "#c8c0b0" },
-  { id: "1715588837145-e177cc797c1a", w: 6216, h: 9324, up: null,              lqip: "#d0c8bc" },
-  { id: "1623991611322-b52b91aff8d7", w: 3710, h: 5566, up: "Tim Dekorasi",    lqip: "#dcc8b8" },
-  { id: "1660068087403-69045a7f2ab6", w: 6000, h: 4000, up: "Pak Hendra",      lqip: "#c4b8b0" },
-  { id: "1715588837113-80441978e93e", w: 3552, h: 5328, up: "Rina Kusuma",     lqip: "#d4ccc4" },
-]
-
-const VIDEO_IDS = [2, 5, 11, 16] // indices into PHOTO_IDS that will be treated as video
-const DURATIONS = ["0:34", "1:12", "0:58", "2:03"]
-
-let _itemSeq = 0
-
-function buildItems(count = 30, offset = 0): MediaItem[] {
-  return Array.from({ length: count }, (_, i) => {
-    const src = PHOTO_IDS[(i + offset) % PHOTO_IDS.length]
-    const vidIdx = VIDEO_IDS.indexOf((i + offset) % PHOTO_IDS.length)
-    const isVideo = vidIdx !== -1
-    return {
-      id: `item-${_itemSeq++}`,
-      url: `https://images.unsplash.com/photo-${src.id}?w=1200&auto=format`,
-      thumb: `https://images.unsplash.com/photo-${src.id}?w=400&h=${Math.round(400 * src.h / src.w)}&fit=crop&auto=format`,
-      lqip: src.lqip,
-      w: src.w,
-      h: src.h,
-      uploader: src.up,
-      isVideo,
-      duration: isVideo ? DURATIONS[vidIdx] : undefined,
-      uploadedAt: `${Math.max(1, 60 - i * 2)} menit lalu`,
-    }
-  })
-}
-
-const INITIAL_ITEMS = buildItems(30, 0)
-const NEW_ARRIVALS: MediaItem[] = [
-  {
-    id: "new-1",
-    url: `https://images.unsplash.com/photo-1660068087403-69045a7f2ab6?w=1200&auto=format`,
-    thumb: `https://images.unsplash.com/photo-1660068087403-69045a7f2ab6?w=400&h=267&fit=crop&auto=format`,
-    lqip: "#c4b8b0",
-    w: 6000, h: 4000,
-    uploader: "Bagas Santoso",
-    isVideo: false,
-    uploadedAt: "baru saja",
-    isNew: true,
-  },
-  {
-    id: "new-2",
-    url: `https://images.unsplash.com/photo-1623991611322-b52b91aff8d7?w=1200&auto=format`,
-    thumb: `https://images.unsplash.com/photo-1623991611322-b52b91aff8d7?w=400&h=600&fit=crop&auto=format`,
-    lqip: "#dcc8b8",
-    w: 3710, h: 5566,
-    uploader: null,
-    isVideo: false,
-    uploadedAt: "baru saja",
-    isNew: true,
-  },
-  {
-    id: "new-3",
-    url: `https://images.unsplash.com/photo-1715911431567-51810f0f0220?w=1200&auto=format`,
-    thumb: `https://images.unsplash.com/photo-1715911431567-51810f0f0220?w=400&h=600&fit=crop&auto=format`,
-    lqip: "#c8d0c0",
-    w: 3456, h: 5184,
-    uploader: "Ibu Sari",
-    isVideo: true,
-    duration: "0:47",
-    uploadedAt: "baru saja",
-    isNew: true,
-  },
-]
-
 export default function GalleryScreen() {
   const [activeNav, setActiveNav] = useState<NavItem>("gallery")
   const [filter, setFilter] = useState<Filter>("semua")
-  const [items, setItems] = useState<MediaItem[]>(INITIAL_ITEMS)
-  const [loading, setLoading] = useState(false)
-  const [initialLoading, setInitialLoading] = useState(true)
-  const [page, setPage] = useState(1)
-  const [hasMore, setHasMore] = useState(true)
-  const [newBadgeCount, setNewBadgeCount] = useState(0)
+  const [items, setItems] = useState<MediaItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
-  const [newItemIds, setNewItemIds] = useState<Set<string>>(new Set())
   const scrollRef = useRef<HTMLDivElement>(null)
-  const sentinelRef = useRef<HTMLDivElement>(null)
-  const newArrivalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Simulate initial load delay
-  useEffect(() => {
-    const t = setTimeout(() => setInitialLoading(false), 1200)
-    return () => clearTimeout(t)
-  }, [])
-
-  // Simulate realtime arrivals after 3.5s
-  useEffect(() => {
-    const t = setTimeout(() => {
-      setNewBadgeCount(3)
-    }, 3500)
-    return () => clearTimeout(t)
-  }, [])
-
-  // Infinite scroll sentinel
-  useEffect(() => {
-    if (initialLoading) return
-    const sentinel = sentinelRef.current
-    if (!sentinel) return
-    const obs = new IntersectionObserver(
-      entries => {
-        if (entries[0].isIntersecting && !loading && hasMore) {
-          loadMore()
-        }
-      },
-      { rootMargin: "400px" }
-    )
-    obs.observe(sentinel)
-    return () => obs.disconnect()
-  }, [loading, hasMore, initialLoading])
-
-  function loadMore() {
-    if (loading || !hasMore) return
+  const load = useCallback(async () => {
     setLoading(true)
-    setTimeout(() => {
-      const next = page + 1
-      setItems(prev => [...prev, ...buildItems(30, page * 30)])
-      setPage(next)
-      if (next >= 4) setHasMore(false)
+    setLoadError(null)
+    try {
+      setItems(await fetchMedia())
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : "Gagal memuat galeri.")
+    } finally {
       setLoading(false)
-    }, 900)
-  }
+    }
+  }, [])
 
-  function handleNewBadgeClick() {
-    const ids = new Set(NEW_ARRIVALS.map(n => n.id))
-    setNewItemIds(ids)
-    setItems(prev => [...NEW_ARRIVALS, ...prev])
-    setNewBadgeCount(0)
-    scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })
-    // Clear highlight after animation
-    setTimeout(() => setNewItemIds(new Set()), 1200)
-  }
+  useEffect(() => {
+    load()
+  }, [load])
 
   const filtered = items.filter(item =>
     filter === "foto" ? !item.isVideo :
@@ -229,37 +87,6 @@ export default function GalleryScreen() {
         ref={scrollRef}
         style={{ flex: 1, overflowY: "auto", paddingBottom: "calc(64px + env(safe-area-inset-bottom) + 20px)", position: "relative" }}
       >
-        {/* New arrivals badge */}
-        {newBadgeCount > 0 && (
-          <div style={{ position: "sticky", top: 12, zIndex: 30, display: "flex", justifyContent: "center", pointerEvents: "none" }}>
-            <button
-              onClick={handleNewBadgeClick}
-              style={{
-                pointerEvents: "auto",
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                backgroundColor: "var(--color-ink-900)",
-                color: "#fff",
-                border: "none",
-                borderRadius: "var(--radius-full)",
-                padding: "8px 16px",
-                fontSize: "var(--text-caption-size)",
-                fontWeight: 600,
-                fontFamily: "var(--font-body)",
-                cursor: "pointer",
-                boxShadow: "var(--shadow-md)",
-                animation: "slideDown 250ms var(--ease-enter) both",
-              }}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-                <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
-              </svg>
-              {newBadgeCount} foto baru
-            </button>
-          </div>
-        )}
-
         <style>{`
           @keyframes slideDown {
             from { opacity: 0; transform: translateY(-8px); }
@@ -276,30 +103,14 @@ export default function GalleryScreen() {
         `}</style>
 
         <div style={{ maxWidth: 1120, margin: "0 auto", padding: "16px var(--space-screen-edge) 0" }}>
-          {initialLoading ? (
+          {loading ? (
             <SkeletonMasonry />
+          ) : loadError ? (
+            <GalleryError message={loadError} onRetry={load} />
           ) : filtered.length === 0 ? (
             <EmptyGallery />
           ) : (
-            <>
-              <MasonryGrid
-                items={filtered}
-                newItemIds={newItemIds}
-                onOpenLightbox={openLightbox}
-              />
-              {/* Infinite scroll sentinel */}
-              <div ref={sentinelRef} style={{ height: 1 }} />
-              {loading && (
-                <div style={{ padding: "20px 0" }}>
-                  <SkeletonMasonry count={6} />
-                </div>
-              )}
-              {!hasMore && (
-                <p style={{ textAlign: "center", fontSize: "var(--text-caption-size)", color: "var(--color-ink-300)", padding: "24px 0" }}>
-                  Semua foto sudah ditampilkan
-                </p>
-              )}
-            </>
+            <MasonryGrid items={filtered} onOpenLightbox={openLightbox} />
           )}
         </div>
       </div>
@@ -328,11 +139,9 @@ export default function GalleryScreen() {
 ───────────────────────────────────────── */
 function MasonryGrid({
   items,
-  newItemIds,
   onOpenLightbox,
 }: {
   items: MediaItem[]
-  newItemIds: Set<string>
   onOpenLightbox: (idx: number) => void
 }) {
   return (
@@ -348,7 +157,6 @@ function MasonryGrid({
           <MediaTile
             key={item.id}
             item={item}
-            isNew={newItemIds.has(item.id)}
             onClick={() => onOpenLightbox(idx)}
           />
         ))}
@@ -362,27 +170,18 @@ function MasonryGrid({
 ───────────────────────────────────────── */
 function MediaTile({
   item,
-  isNew,
   onClick,
 }: {
   item: MediaItem
-  isNew: boolean
   onClick: () => void
 }) {
   const [loaded, setLoaded] = useState(false)
-  const ratio = item.h / item.w
 
   return (
-    <div
-      style={{
-        breakInside: "avoid",
-        marginBottom: 8,
-        animation: isNew ? "fadeSlideIn 250ms var(--ease-enter) both" : "none",
-      }}
-    >
+    <div style={{ breakInside: "avoid", marginBottom: 8 }}>
       <button
         onClick={onClick}
-        aria-label={`Buka foto${item.uploader ? ` dari ${item.uploader}` : ""}`}
+        aria-label={`Buka media${item.uploader ? ` dari ${item.uploader}` : ""}`}
         style={{
           display: "block",
           width: "100%",
@@ -392,41 +191,21 @@ function MediaTile({
           borderRadius: "var(--radius-lg)",
           overflow: "hidden",
           position: "relative",
-          backgroundColor: item.lqip,
-          // maintain aspect ratio via padding trick
-          aspectRatio: `${item.w} / ${item.h}`,
+          backgroundColor: "var(--color-ink-100)",
+          minHeight: loaded ? undefined : 160,
         }}
-        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.transform = "scale(1.02)" }}
-        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.transform = "scale(1)" }}
       >
-        {/* LQIP blurred placeholder */}
-        {!loaded && (
-          <div
-            aria-hidden="true"
-            style={{
-              position: "absolute",
-              inset: 0,
-              backgroundColor: item.lqip,
-              filter: "blur(8px)",
-              transform: "scale(1.05)",
-            }}
-          />
-        )}
-
         <img
-          src={item.thumb}
+          src={item.url}
           alt={item.uploader ? `Foto dari ${item.uploader}` : "Foto tamu"}
           loading="lazy"
           onLoad={() => setLoaded(true)}
           style={{
             display: "block",
             width: "100%",
-            height: "100%",
-            objectFit: "cover",
-            position: "absolute",
-            inset: 0,
+            height: "auto",
             opacity: loaded ? 1 : 0,
-            transition: "opacity var(--duration-base) var(--ease-standard), transform var(--duration-fast) var(--ease-standard)",
+            transition: "opacity var(--duration-base) var(--ease-standard)",
           }}
         />
 
@@ -450,12 +229,12 @@ function MediaTile({
               <polygon points="5 3 19 12 5 21 5 3" />
             </svg>
             <span style={{ fontSize: 11, color: "white", fontWeight: 600, lineHeight: 1 }}>
-              {item.duration}
+              Video
             </span>
           </div>
         )}
 
-        {/* Uploader name overlay — bottom 20% gradient */}
+        {/* Uploader name overlay */}
         {item.uploader && (
           <div
             aria-hidden="true"
@@ -621,7 +400,7 @@ function Lightbox({
               style={{
                 width: "min(92vw, 600px)",
                 height: "min(84vh, 400px)",
-                backgroundColor: item.lqip,
+                backgroundColor: "rgba(255,255,255,0.06)",
                 borderRadius: 4,
                 display: "flex",
                 alignItems: "center",
@@ -676,7 +455,7 @@ function Lightbox({
             </p>
           )}
           <p style={{ margin: 0, fontSize: "var(--text-caption-size)", color: "rgba(255,255,255,0.5)", lineHeight: 1.4 }}>
-            {item.uploadedAt}
+            {relativeTime(item.createdAt)}
           </p>
         </div>
 
@@ -871,6 +650,36 @@ function SkeletonMasonry({ count = 12 }: { count?: number }) {
           <Skeleton height={heights[i % heights.length]} radius="var(--radius-lg)" />
         </div>
       ))}
+    </div>
+  )
+}
+
+/* ─────────────────────────────────────────
+   ERROR STATE
+───────────────────────────────────────── */
+function GalleryError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div
+      role="alert"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        textAlign: "center",
+        padding: "80px 24px",
+        gap: 16,
+      }}
+    >
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--color-ink-300)" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+        <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+      </svg>
+      <p style={{ margin: 0, fontSize: "var(--text-body-size)", lineHeight: "var(--text-body-lh)", color: "var(--color-ink-500)", maxWidth: "32ch" }}>
+        {message}
+      </p>
+      <Button variant="secondary" size="medium" onClick={onRetry}>
+        Coba Lagi
+      </Button>
     </div>
   )
 }

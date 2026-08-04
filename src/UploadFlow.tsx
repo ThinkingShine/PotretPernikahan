@@ -2,13 +2,18 @@ import { useState, useRef, useEffect } from "react"
 import { Button } from "./components/Button"
 import { Input } from "./components/Input"
 import { BottomNav } from "./components/BottomNav"
+import { uploadMedia } from "./lib/api"
 
 type NavItem = "upload" | "gallery" | "guestbook"
 type Step = "pick" | "review" | "done"
 type FileStatus = "queued" | "uploading" | "done" | "error" | "rejected"
 
+const MAX_PHOTO_BYTES = 25 * 1024 * 1024
+const MAX_VIDEO_BYTES = 200 * 1024 * 1024
+
 interface UploadFile {
   id: string
+  file: File
   name: string
   size: string
   sizeBytes: number
@@ -18,70 +23,62 @@ interface UploadFile {
   errorMsg?: string
 }
 
-// Simulated file data for the demo
-const DEMO_FILES: UploadFile[] = [
-  {
-    id: "f1",
-    name: "IMG_2381.heic",
-    size: "3,6 MB",
-    sizeBytes: 3_600_000,
-    thumb:
-      "https://images.unsplash.com/photo-1596457221755-b96bc3a6df18?w=128&h=128&fit=crop&auto=format",
-    status: "done",
-    progress: 100,
-  },
-  {
-    id: "f2",
-    name: "IMG_2390.jpeg",
-    size: "2,1 MB",
-    sizeBytes: 2_100_000,
-    thumb:
-      "https://images.unsplash.com/photo-1519741196428-6a2175fa2557?w=128&h=128&fit=crop&auto=format",
-    status: "uploading",
-    progress: 60,
-  },
-  {
-    id: "f3",
-    name: "VID_2395.mp4",
-    size: "48,2 MB",
-    sizeBytes: 48_200_000,
-    thumb:
-      "https://images.unsplash.com/photo-1665960213508-48f07086d49c?w=128&h=128&fit=crop&auto=format",
-    status: "error",
-    progress: 33,
-    errorMsg: "Gagal terkirim",
-  },
-  {
-    id: "f4",
-    name: "foto-resepsi-besar.jpeg",
-    size: "31,4 MB",
-    sizeBytes: 31_400_000,
-    thumb:
-      "https://images.unsplash.com/photo-1724280120520-c52b4c1170fd?w=128&h=128&fit=crop&auto=format",
-    status: "rejected",
+function formatSize(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1).replace(".", ",")} MB`
+}
+
+/** Wraps a picked File, rejecting up front anything over the size limit. */
+function toUploadFile(file: File): UploadFile {
+  const isVideo = file.type.startsWith("video/")
+  const limit = isVideo ? MAX_VIDEO_BYTES : MAX_PHOTO_BYTES
+  const tooBig = file.size > limit
+
+  return {
+    id: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2, 8)}`,
+    file,
+    name: file.name,
+    size: formatSize(file.size),
+    sizeBytes: file.size,
+    thumb: URL.createObjectURL(file),
+    status: tooBig ? "rejected" : "queued",
     progress: 0,
-    errorMsg: "File terlalu besar. Maksimum 25 MB.",
-  },
-  {
-    id: "f5",
-    name: "IMG_2401.heic",
-    size: "4,8 MB",
-    sizeBytes: 4_800_000,
-    thumb:
-      "https://images.unsplash.com/photo-1721401870202-8e2264ecced2?w=128&h=128&fit=crop&auto=format",
-    status: "queued",
-    progress: 0,
-  },
-]
+    errorMsg: tooBig
+      ? `File terlalu besar. Maksimum ${Math.round(limit / (1024 * 1024))} MB.`
+      : undefined,
+  }
+}
 
 export default function UploadFlow() {
   const [step, setStep] = useState<Step>("pick")
-  const [files, setFiles] = useState<UploadFile[]>(DEMO_FILES)
+  const [files, setFiles] = useState<UploadFile[]>([])
   const [guestName, setGuestName] = useState("")
   const [activeNav, setActiveNav] = useState<NavItem>("upload")
-  const [offline, setOffline] = useState(true) // shown for demo
+  const [offline, setOffline] = useState(!navigator.onLine)
   const [dropHover, setDropHover] = useState(false)
+  const [sending, setSending] = useState(false)
+  const [uploadedCount, setUploadedCount] = useState(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Track real connectivity rather than a hardcoded demo flag.
+  useEffect(() => {
+    const goOffline = () => setOffline(true)
+    const goOnline = () => setOffline(false)
+    window.addEventListener("offline", goOffline)
+    window.addEventListener("online", goOnline)
+    return () => {
+      window.removeEventListener("offline", goOffline)
+      window.removeEventListener("online", goOnline)
+    }
+  }, [])
+
+  // Release object URLs when the component unmounts.
+  useEffect(() => {
+    return () => {
+      files.forEach(f => URL.revokeObjectURL(f.thumb))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Global progress: average of all non-rejected files
   const uploadableFiles = files.filter(f => f.status !== "rejected")
@@ -91,38 +88,66 @@ export default function UploadFlow() {
       : uploadableFiles.reduce((sum, f) => sum + f.progress, 0) /
         uploadableFiles.length
 
-  // Simulate progress ticking on "uploading" files
-  useEffect(() => {
-    if (step !== "review") return
-    const interval = setInterval(() => {
-      setFiles(prev =>
-        prev.map(f => {
-          if (f.status === "uploading" && f.progress < 100) {
-            const next = Math.min(f.progress + 3, 100)
-            return { ...f, progress: next, status: next === 100 ? "done" : "uploading" }
-          }
-          if (f.status === "queued") {
-            // Start queued files after a short delay feel
-            const allUploading = prev.filter(x => x.status === "uploading")
-            if (allUploading.length < 2) return { ...f, status: "uploading", progress: 2 }
-          }
-          return f
-        })
-      )
-    }, 180)
-    return () => clearInterval(interval)
-  }, [step])
-
-  function removeFile(id: string) {
-    setFiles(prev => prev.filter(f => f.id !== id))
+  function addFiles(list: FileList | null) {
+    if (!list || list.length === 0) return
+    const picked = Array.from(list).map(toUploadFile)
+    setFiles(prev => [...prev, ...picked])
+    setStep("review")
   }
 
-  function retryFile(id: string) {
-    setFiles(prev =>
-      prev.map(f =>
-        f.id === id ? { ...f, status: "uploading", progress: 0, errorMsg: undefined } : f
+  function updateFile(id: string, patch: Partial<UploadFile>) {
+    setFiles(prev => prev.map(f => (f.id === id ? { ...f, ...patch } : f)))
+  }
+
+  function removeFile(id: string) {
+    setFiles(prev => {
+      const target = prev.find(f => f.id === id)
+      if (target) URL.revokeObjectURL(target.thumb)
+      return prev.filter(f => f.id !== id)
+    })
+  }
+
+  async function uploadOne(item: UploadFile): Promise<boolean> {
+    updateFile(item.id, { status: "uploading", progress: 0, errorMsg: undefined })
+    try {
+      await uploadMedia(item.file, guestName, percent =>
+        updateFile(item.id, { progress: percent }),
       )
-    )
+      updateFile(item.id, { status: "done", progress: 100 })
+      return true
+    } catch (err) {
+      updateFile(item.id, {
+        status: "error",
+        errorMsg: err instanceof Error ? err.message : "Gagal terkirim",
+      })
+      return false
+    }
+  }
+
+  async function retryFile(id: string) {
+    const target = files.find(f => f.id === id)
+    if (target) await uploadOne(target)
+  }
+
+  async function handleSend() {
+    const pending = files.filter(f => f.status === "queued" || f.status === "error")
+    if (pending.length === 0) return
+    setSending(true)
+    let ok = 0
+    // Sequential so progress stays readable and the connection is not saturated.
+    for (const item of pending) {
+      if (await uploadOne(item)) ok++
+    }
+    setSending(false)
+    setUploadedCount(ok)
+    if (ok > 0) setStep("done")
+  }
+
+  function resetFlow() {
+    files.forEach(f => URL.revokeObjectURL(f.thumb))
+    setFiles([])
+    setUploadedCount(0)
+    setStep("pick")
   }
 
   const activeCount = files.filter(f => f.status !== "rejected").length
@@ -227,7 +252,7 @@ export default function UploadFlow() {
             dropHover={dropHover}
             setDropHover={setDropHover}
             fileInputRef={fileInputRef}
-            onPick={() => setStep("review")}
+            onDropFiles={addFiles}
           />
         )}
 
@@ -239,19 +264,13 @@ export default function UploadFlow() {
             onRemove={removeFile}
             onRetry={retryFile}
             activeCount={activeCount}
-            onSubmit={() => setStep("done")}
+            sending={sending}
+            onSubmit={handleSend}
           />
         )}
 
         {step === "done" && (
-          <DoneStep
-            count={activeCount}
-            onUploadAgain={() => {
-              setFiles(DEMO_FILES)
-              setStep("pick")
-            }}
-            onGallery={() => {}}
-          />
+          <DoneStep count={uploadedCount} onUploadAgain={resetFlow} />
         )}
       </div>
 
@@ -262,7 +281,10 @@ export default function UploadFlow() {
         multiple
         accept="image/jpeg,image/png,image/heic,image/webp,video/mp4,video/quicktime,video/webm"
         style={{ display: "none" }}
-        onChange={() => setStep("review")}
+        onChange={e => {
+          addFiles(e.target.files)
+          e.target.value = ""
+        }}
       />
 
       {/* ── Bottom nav ── */}
@@ -280,13 +302,15 @@ function PickStep({
   dropHover,
   setDropHover,
   fileInputRef,
-  onPick,
+  onDropFiles,
 }: {
   dropHover: boolean
   setDropHover: (v: boolean) => void
   fileInputRef: React.RefObject<HTMLInputElement | null>
-  onPick: () => void
+  onDropFiles: (list: FileList | null) => void
 }) {
+  const openPicker = () => fileInputRef.current?.click()
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       {/* Dropzone */}
@@ -296,9 +320,9 @@ function PickStep({
         aria-label="Area unggah — klik atau seret file ke sini"
         onDragOver={e => { e.preventDefault(); setDropHover(true) }}
         onDragLeave={() => setDropHover(false)}
-        onDrop={e => { e.preventDefault(); setDropHover(false); onPick() }}
-        onClick={() => fileInputRef.current?.click()}
-        onKeyDown={e => e.key === "Enter" && fileInputRef.current?.click()}
+        onDrop={e => { e.preventDefault(); setDropHover(false); onDropFiles(e.dataTransfer.files) }}
+        onClick={openPicker}
+        onKeyDown={e => e.key === "Enter" && openPicker()}
         style={{
           border: `1.5px dashed ${dropHover ? "var(--color-primary-600)" : "var(--color-ink-300)"}`,
           borderRadius: "var(--radius-lg)",
@@ -348,10 +372,10 @@ function PickStep({
       </div>
 
       {/* CTA buttons */}
-      <Button variant="primary" size="large" fullWidth icon={<GalleryIcon />} onClick={onPick}>
+      <Button variant="primary" size="large" fullWidth icon={<GalleryIcon />} onClick={openPicker}>
         Pilih dari Galeri
       </Button>
-      <Button variant="secondary" size="large" fullWidth icon={<CameraIcon />} onClick={onPick}>
+      <Button variant="secondary" size="large" fullWidth icon={<CameraIcon />} onClick={openPicker}>
         Ambil Foto
       </Button>
     </div>
@@ -368,6 +392,7 @@ function ReviewStep({
   onRemove,
   onRetry,
   activeCount,
+  sending,
   onSubmit,
 }: {
   files: UploadFile[]
@@ -376,6 +401,7 @@ function ReviewStep({
   onRemove: (id: string) => void
   onRetry: (id: string) => void
   activeCount: number
+  sending: boolean
   onSubmit: () => void
 }) {
   return (
@@ -405,8 +431,15 @@ function ReviewStep({
       </div>
 
       {/* Submit */}
-      <Button variant="primary" size="large" fullWidth onClick={onSubmit}>
-        Kirim {activeCount} File
+      <Button
+        variant="primary"
+        size="large"
+        fullWidth
+        loading={sending}
+        disabled={activeCount === 0}
+        onClick={onSubmit}
+      >
+        {sending ? "Mengunggah\u2026" : `Kirim ${activeCount} File`}
       </Button>
     </div>
   )
@@ -624,11 +657,9 @@ function FileRow({
 function DoneStep({
   count,
   onUploadAgain,
-  onGallery,
 }: {
   count: number
   onUploadAgain: () => void
-  onGallery: () => void
 }) {
   return (
     <div
@@ -685,9 +716,6 @@ function DoneStep({
       <div style={{ display: "flex", flexDirection: "column", gap: 12, width: "100%" }}>
         <Button variant="primary" size="large" fullWidth icon={<UploadIcon />} onClick={onUploadAgain}>
           Unggah Lagi
-        </Button>
-        <Button variant="secondary" size="large" fullWidth icon={<GalleryIcon />} onClick={onGallery}>
-          Lihat Galeri
         </Button>
       </div>
     </div>
