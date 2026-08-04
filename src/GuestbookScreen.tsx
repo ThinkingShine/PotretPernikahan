@@ -29,7 +29,11 @@ function toEntry(entry: ApiGuestbookEntry, isOwn = false): GuestbookEntry {
   }
 }
 
-export default function GuestbookScreen() {
+export default function GuestbookScreen({
+  onNavigate,
+}: {
+  onNavigate?: (view: "upload" | "gallery" | "guestbook") => void
+}) {
   const [activeNav, setActiveNav] = useState<NavItem>("guestbook")
   const [entries, setEntries] = useState<GuestbookEntry[]>([])
   const [loading, setLoading] = useState(true)
@@ -196,7 +200,13 @@ export default function GuestbookScreen() {
 
       {/* ── Bottom nav ── */}
       <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 50 }}>
-        <BottomNav active={activeNav} onChange={setActiveNav} />
+        <BottomNav
+          active={activeNav}
+          onChange={v => {
+            setActiveNav(v)
+            onNavigate?.(v)
+          }}
+        />
       </div>
     </div>
   )
@@ -501,7 +511,9 @@ function ComposeSheet({
           zIndex: 110,
           backgroundColor: "var(--color-surface)",
           borderRadius: "var(--radius-xl) var(--radius-xl) 0 0",
-          padding: "0 var(--space-screen-edge) calc(var(--space-screen-edge) + env(safe-area-inset-bottom))",
+          // Clear the fixed bottom nav (64px) so the submit button is never
+          // hidden behind it.
+          padding: "0 var(--space-screen-edge) calc(64px + var(--space-screen-edge) + env(safe-area-inset-bottom))",
           maxWidth: 680,
           margin: "0 auto",
           boxShadow: "var(--shadow-lg)",

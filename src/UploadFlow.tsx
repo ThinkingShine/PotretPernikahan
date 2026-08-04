@@ -49,7 +49,11 @@ function toUploadFile(file: File): UploadFile {
   }
 }
 
-export default function UploadFlow() {
+export default function UploadFlow({
+  onNavigate,
+}: {
+  onNavigate?: (view: "upload" | "gallery" | "guestbook") => void
+}) {
   const [step, setStep] = useState<Step>("pick")
   const [files, setFiles] = useState<UploadFile[]>([])
   const [guestName, setGuestName] = useState("")
@@ -289,7 +293,13 @@ export default function UploadFlow() {
 
       {/* ── Bottom nav ── */}
       <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 100 }}>
-        <BottomNav active={activeNav} onChange={setActiveNav} />
+        <BottomNav
+          active={activeNav}
+          onChange={v => {
+            setActiveNav(v)
+            onNavigate?.(v)
+          }}
+        />
       </div>
     </div>
   )

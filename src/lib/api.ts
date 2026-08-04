@@ -7,6 +7,7 @@ export interface MediaItem {
   url: string
   uploader: string | null
   isVideo: boolean
+  approved?: boolean
   createdAt: number
 }
 
@@ -14,7 +15,29 @@ export interface GuestbookEntry {
   id: string
   author: string
   message: string
+  approved?: boolean
   createdAt: number
+}
+
+/* ── Admin passcode, held for the tab session only ── */
+
+const PASSCODE_KEY = "pp-admin-passcode"
+
+export function getAdminPasscode(): string | null {
+  try {
+    return sessionStorage.getItem(PASSCODE_KEY)
+  } catch {
+    return null
+  }
+}
+
+export function setAdminPasscode(passcode: string | null) {
+  try {
+    if (passcode === null) sessionStorage.removeItem(PASSCODE_KEY)
+    else sessionStorage.setItem(PASSCODE_KEY, passcode)
+  } catch {
+    // Private-mode browsers may block storage; the session just won't persist.
+  }
 }
 
 /** Reads the server's error message when present, else a generic fallback. */
@@ -127,4 +150,89 @@ export function relativeTime(createdAt: number): string {
   if (hours < 24) return `${hours} jam lalu`
   const days = Math.floor(hours / 24)
   return `${days} hari lalu`
+}
+
+/* ── Slideshow ─────────────────────────────────────── */
+
+export async function fetchSlideshow(): Promise<{
+  items: MediaItem[]
+  wishes: GuestbookEntry[]
+}> {
+  const res = await request("/slideshow")
+  if (!res.ok) throw new Error(await errorMessage(res, "Gagal memuat slideshow."))
+  const body = await res.json()
+  return { items: body.items ?? [], wishes: body.wishes ?? [] }
+}
+
+/* ── Admin ─────────────────────────────────────────── */
+
+/** Adds the stored passcode header to an admin request. */
+async function adminRequest(path: string, init?: RequestInit): Promise<Response> {
+  const passcode = getAdminPasscode() ?? ""
+  return request(path, {
+    ...init,
+    headers: { "X-Admin-Passcode": passcode, ...(init?.headers ?? {}) },
+  })
+}
+
+export async function adminLogin(passcode: string): Promise<void> {
+  const res = await request("/admin-login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ passcode }),
+  })
+  if (!res.ok) throw new Error(await errorMessage(res, "Kode admin tidak sesuai."))
+  setAdminPasscode(passcode)
+}
+
+export async function adminFetchMedia(): Promise<MediaItem[]> {
+  const res = await adminRequest("/admin/media")
+  if (!res.ok) throw new Error(await errorMessage(res, "Gagal memuat media."))
+  const body = await res.json()
+  return body.items ?? []
+}
+
+export async function adminFetchGuestbook(): Promise<GuestbookEntry[]> {
+  const res = await adminRequest("/admin/guestbook")
+  if (!res.ok) throw new Error(await errorMessage(res, "Gagal memuat ucapan."))
+  const body = await res.json()
+  return body.entries ?? []
+}
+
+export async function adminSetMediaApproval(
+  id: string,
+  approved: boolean,
+): Promise<MediaItem> {
+  const res = await adminRequest(`/admin/media/${id}/approval`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ approved }),
+  })
+  if (!res.ok) throw new Error(await errorMessage(res, "Gagal memperbarui status."))
+  const body = await res.json()
+  return body.item
+}
+
+export async function adminSetGuestbookApproval(
+  id: string,
+  approved: boolean,
+): Promise<GuestbookEntry> {
+  const res = await adminRequest(`/admin/guestbook/${id}/approval`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ approved }),
+  })
+  if (!res.ok) throw new Error(await errorMessage(res, "Gagal memperbarui status."))
+  const body = await res.json()
+  return body.entry
+}
+
+export async function adminDeleteMedia(id: string): Promise<void> {
+  const res = await adminRequest(`/admin/media/${id}`, { method: "DELETE" })
+  if (!res.ok) throw new Error(await errorMessage(res, "Gagal menghapus media."))
+}
+
+export async function adminDeleteGuestbookEntry(id: string): Promise<void> {
+  const res = await adminRequest(`/admin/guestbook/${id}`, { method: "DELETE" })
+  if (!res.ok) throw new Error(await errorMessage(res, "Gagal menghapus ucapan."))
 }

@@ -13,7 +13,11 @@ import { fetchMedia, relativeTime, type MediaItem } from "./lib/api"
 type NavItem = "upload" | "gallery" | "guestbook"
 type Filter = "semua" | "foto" | "video"
 
-export default function GalleryScreen() {
+export default function GalleryScreen({
+  onNavigate,
+}: {
+  onNavigate?: (view: "upload" | "gallery" | "guestbook") => void
+}) {
   const [activeNav, setActiveNav] = useState<NavItem>("gallery")
   const [filter, setFilter] = useState<Filter>("semua")
   const [items, setItems] = useState<MediaItem[]>([])
@@ -127,7 +131,13 @@ export default function GalleryScreen() {
 
       {/* ── Bottom nav ── */}
       <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 50 }}>
-        <BottomNav active={activeNav} onChange={setActiveNav} />
+        <BottomNav
+          active={activeNav}
+          onChange={v => {
+            setActiveNav(v)
+            onNavigate?.(v)
+          }}
+        />
       </div>
     </div>
   )

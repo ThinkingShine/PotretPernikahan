@@ -1,6 +1,14 @@
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "./components/Button"
 import { BottomNav } from "./components/BottomNav"
+import { Skeleton } from "./components/Skeleton"
+import {
+  fetchGuestbook,
+  fetchMedia,
+  relativeTime,
+  type GuestbookEntry,
+  type MediaItem,
+} from "./lib/api"
 
 type NavItem = "upload" | "gallery" | "guestbook"
 
@@ -8,24 +16,34 @@ type NavItem = "upload" | "gallery" | "guestbook"
 const COVER_URL =
   "https://images.unsplash.com/photo-1650377509454-1bbd8392e122?w=800&h=450&fit=crop&auto=format"
 
-// Gallery thumbnails — three distinct wedding shots
-const THUMBNAILS = [
-  {
-    url: "https://images.unsplash.com/photo-1541700513212-79f419c0221d?w=400&h=400&fit=crop&auto=format",
-    alt: "Foto dari Rina, pasangan berjalan di taman",
-  },
-  {
-    url: "https://images.unsplash.com/photo-1527529482837-4698179dc6ce?w=400&h=400&fit=crop&auto=format",
-    alt: "Foto dari Pak Hendra, tamu mengangkat gelas",
-  },
-  {
-    url: "https://images.unsplash.com/photo-1714972383570-44ddc9738355?w=400&h=400&fit=crop&auto=format",
-    alt: "Foto dari Bagas, lantai dansa resepsi",
-  },
-]
-
-export default function GuestLanding() {
+export default function GuestLanding({
+  onNavigate,
+}: {
+  onNavigate?: (view: "upload" | "gallery" | "guestbook") => void
+}) {
   const [activeNav, setActiveNav] = useState<NavItem>("upload")
+  const [media, setMedia] = useState<MediaItem[]>([])
+  const [wishes, setWishes] = useState<GuestbookEntry[]>([])
+  const [loading, setLoading] = useState(true)
+
+  // Latest few of each, refreshed whenever the landing screen mounts.
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      const [mediaResult, wishResult] = await Promise.allSettled([
+        fetchMedia(),
+        fetchGuestbook(),
+      ])
+      if (cancelled) return
+      if (mediaResult.status === "fulfilled") setMedia(mediaResult.value.slice(0, 3))
+      if (wishResult.status === "fulfilled") setWishes(wishResult.value.slice(0, 1))
+      setLoading(false)
+    }
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   return (
     <div
@@ -137,6 +155,7 @@ export default function GuestLanding() {
             size="large"
             fullWidth
             icon={<CameraIcon />}
+            onClick={() => onNavigate?.("upload")}
           >
             Bagikan Foto &amp; Video
           </Button>
@@ -145,6 +164,7 @@ export default function GuestLanding() {
             size="large"
             fullWidth
             icon={<PenIcon />}
+            onClick={() => onNavigate?.("guestbook")}
           >
             Tulis Ucapan
           </Button>
@@ -175,26 +195,21 @@ export default function GuestLanding() {
             >
               Galeri Terbaru
             </h2>
-            <a
-              href="#"
+            <button
+              onClick={() => onNavigate?.("gallery")}
               style={{
                 fontSize: "var(--text-caption-size)",
                 color: "var(--color-primary-600)",
                 fontWeight: 500,
-                textDecoration: "none",
+                background: "none",
+                border: "none",
+                cursor: "pointer",
                 padding: "4px 0",
+                fontFamily: "var(--font-body)",
               }}
-              onMouseEnter={e =>
-                ((e.currentTarget as HTMLAnchorElement).style.textDecoration =
-                  "underline")
-              }
-              onMouseLeave={e =>
-                ((e.currentTarget as HTMLAnchorElement).style.textDecoration =
-                  "none")
-              }
             >
               Lihat semua
-            </a>
+            </button>
           </div>
 
           {/* 3 thumbnails, equal-width, 8px gap */}
@@ -205,43 +220,65 @@ export default function GuestLanding() {
               gap: 8,
             }}
           >
-            {THUMBNAILS.map((t, i) => (
-              <button
-                key={i}
-                aria-label={t.alt}
-                style={{
-                  padding: 0,
-                  border: "none",
-                  background: "var(--color-ink-100)",
-                  borderRadius: "var(--radius-lg)",
-                  overflow: "hidden",
-                  cursor: "pointer",
-                  aspectRatio: "1 / 1",
-                  display: "block",
-                  width: "100%",
-                }}
-                onMouseEnter={e =>
-                  ((e.currentTarget as HTMLButtonElement).style.opacity = "0.88")
-                }
-                onMouseLeave={e =>
-                  ((e.currentTarget as HTMLButtonElement).style.opacity = "1")
-                }
-              >
-                <img
-                  src={t.url}
-                  alt={t.alt}
-                  loading="lazy"
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    objectFit: "cover",
-                    display: "block",
-                    transition: "opacity var(--duration-fast) var(--ease-standard)",
-                  }}
-                />
-              </button>
-            ))}
+            {loading
+              ? [0, 1, 2].map(i => (
+                  <div key={i} style={{ aspectRatio: "1 / 1" }}>
+                    <Skeleton height="100%" radius="var(--radius-lg)" />
+                  </div>
+                ))
+              : media.map(item => (
+                  <button
+                    key={item.id}
+                    aria-label={
+                      item.uploader ? `Foto dari ${item.uploader}` : "Foto tamu"
+                    }
+                    onClick={() => onNavigate?.("gallery")}
+                    style={{
+                      padding: 0,
+                      border: "none",
+                      background: "var(--color-ink-100)",
+                      borderRadius: "var(--radius-lg)",
+                      overflow: "hidden",
+                      cursor: "pointer",
+                      aspectRatio: "1 / 1",
+                      display: "block",
+                      width: "100%",
+                    }}
+                    onMouseEnter={e =>
+                      ((e.currentTarget as HTMLButtonElement).style.opacity = "0.88")
+                    }
+                    onMouseLeave={e =>
+                      ((e.currentTarget as HTMLButtonElement).style.opacity = "1")
+                    }
+                  >
+                    <img
+                      src={item.url}
+                      alt={item.uploader ? `Foto dari ${item.uploader}` : "Foto tamu"}
+                      loading="lazy"
+                      style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
+                        display: "block",
+                        transition: "opacity var(--duration-fast) var(--ease-standard)",
+                      }}
+                    />
+                  </button>
+                ))}
           </div>
+
+          {!loading && media.length === 0 && (
+            <p
+              style={{
+                fontSize: "var(--text-caption-size)",
+                lineHeight: "var(--text-caption-lh)",
+                color: "var(--color-ink-500)",
+                margin: 0,
+              }}
+            >
+              Belum ada foto. Jadilah yang pertama berbagi momen hari ini.
+            </p>
+          )}
         </section>
 
         {/* ── 4. Ucapan Terbaru ── */}
@@ -262,11 +299,43 @@ export default function GuestLanding() {
             Ucapan Terbaru
           </h2>
 
-          <GuestbookCard
-            name="Siti Rahayu"
-            message="Selamat menempuh hidup baru, Dinda & Arya! Semoga selalu dalam lindungan Allah dan rumah tangganya penuh keberkahan."
-            time="2 jam lalu"
-          />
+          {loading ? (
+            <div
+              style={{
+                backgroundColor: "var(--color-surface)",
+                borderRadius: "var(--radius-lg)",
+                padding: "16px 20px",
+                border: "1px solid var(--color-ink-100)",
+                borderLeft: "2px solid var(--color-primary-100)",
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+              }}
+            >
+              <Skeleton height={18} width="40%" />
+              <Skeleton height={14} width="90%" />
+            </div>
+          ) : wishes.length === 0 ? (
+            <p
+              style={{
+                fontSize: "var(--text-caption-size)",
+                lineHeight: "var(--text-caption-lh)",
+                color: "var(--color-ink-500)",
+                margin: 0,
+              }}
+            >
+              Belum ada ucapan. Tulis ucapan pertama untuk pengantin.
+            </p>
+          ) : (
+            wishes.map(wish => (
+              <GuestbookCard
+                key={wish.id}
+                name={wish.author}
+                message={wish.message}
+                time={relativeTime(wish.createdAt)}
+              />
+            ))
+          )}
         </section>
       </div>
 
@@ -274,7 +343,13 @@ export default function GuestLanding() {
       <div
         style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 100 }}
       >
-        <BottomNav active={activeNav} onChange={setActiveNav} />
+        <BottomNav
+          active={activeNav}
+          onChange={v => {
+            setActiveNav(v)
+            onNavigate?.(v)
+          }}
+        />
       </div>
     </div>
   )
