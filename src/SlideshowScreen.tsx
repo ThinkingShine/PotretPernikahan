@@ -1,12 +1,30 @@
 import { useState, useEffect, useCallback, useRef } from "react"
-import { fetchSlideshow, type GuestbookEntry, type MediaItem } from "./lib/api"
+import {
+  fetchSlideshow,
+  type GuestbookEntry,
+  type MediaItem,
+  type SlideshowSettings,
+} from "./lib/api"
 
-const PHOTO_MS = 7000
 const REFRESH_MS = 30000
+
+/** Fisher-Yates, so shuffled order is uniform rather than sort-comparator luck. */
+function shuffled<T>(list: T[]): T[] {
+  const copy = [...list]
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[copy[i], copy[j]] = [copy[j], copy[i]]
+  }
+  return copy
+}
 
 export default function SlideshowScreen() {
   const [items, setItems] = useState<MediaItem[]>([])
   const [wishes, setWishes] = useState<GuestbookEntry[]>([])
+  const [settings, setSettings] = useState<SlideshowSettings>({
+    durationMs: 7000,
+    shuffle: false,
+  })
   const [index, setIndex] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -17,11 +35,15 @@ export default function SlideshowScreen() {
   const load = useCallback(async () => {
     try {
       const data = await fetchSlideshow()
+      setSettings(data.settings)
       setItems(prev => {
-        // Keep the current position stable when the list is unchanged.
-        const sameLength = prev.length === data.items.length
-        const sameIds = sameLength && prev.every((p, i) => p.id === data.items[i].id)
-        return sameIds ? prev : data.items
+        // Keep the current position stable when the set of items is unchanged,
+        // so a refresh never restarts or reorders a running show.
+        const sameSet =
+          prev.length === data.items.length &&
+          prev.every(p => data.items.some(n => n.id === p.id))
+        if (sameSet) return prev
+        return data.settings.shuffle ? shuffled(data.items) : data.items
       })
       setWishes(data.wishes)
       setError(null)
@@ -52,9 +74,9 @@ export default function SlideshowScreen() {
   // Photos advance on a timer; videos advance when they finish.
   useEffect(() => {
     if (!current || current.isVideo || items.length <= 1) return
-    const t = setTimeout(advance, PHOTO_MS)
+    const t = setTimeout(advance, settings.durationMs)
     return () => clearTimeout(t)
-  }, [current, advance, items.length])
+  }, [current, advance, items.length, settings.durationMs])
 
   // Auto-hide the on-screen controls so the projector view stays clean.
   const wakeChrome = useCallback(() => {

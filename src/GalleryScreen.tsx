@@ -213,19 +213,36 @@ function MediaTile({
           minHeight: loaded ? undefined : 160,
         }}
       >
-        <img
-          src={item.url}
-          alt={item.uploader ? `Foto dari ${item.uploader}` : "Foto tamu"}
-          loading="lazy"
-          onLoad={() => setLoaded(true)}
-          style={{
-            display: "block",
-            width: "100%",
-            height: "auto",
-            opacity: loaded ? 1 : 0,
-            transition: "opacity var(--duration-base) var(--ease-standard)",
-          }}
-        />
+        {item.isVideo ? (
+          <video
+            src={item.url}
+            muted
+            playsInline
+            preload="metadata"
+            onLoadedMetadata={() => setLoaded(true)}
+            style={{
+              display: "block",
+              width: "100%",
+              height: "auto",
+              opacity: loaded ? 1 : 0,
+              transition: "opacity var(--duration-base) var(--ease-standard)",
+            }}
+          />
+        ) : (
+          <img
+            src={item.url}
+            alt={item.uploader ? `Foto dari ${item.uploader}` : "Foto tamu"}
+            loading="lazy"
+            onLoad={() => setLoaded(true)}
+            style={{
+              display: "block",
+              width: "100%",
+              height: "auto",
+              opacity: loaded ? 1 : 0,
+              transition: "opacity var(--duration-base) var(--ease-standard)",
+            }}
+          />
+        )}
 
         {/* Video badge */}
         {item.isVideo && (
@@ -357,8 +374,8 @@ function Lightbox({
         display: "flex",
         flexDirection: "column",
       }}
-      onTouchStart={handleTouchStart}
-      onTouchEnd={handleTouchEnd}
+      onTouchStart={item.isVideo ? undefined : handleTouchStart}
+      onTouchEnd={item.isVideo ? undefined : handleTouchEnd}
     >
       {/* ── Top bar ── */}
       <div
@@ -428,21 +445,41 @@ function Lightbox({
               </svg>
             </div>
           )}
-          <img
-            src={item.url}
-            alt={item.uploader ? `Foto dari ${item.uploader}` : "Foto tamu"}
-            onLoad={() => setImgLoaded(true)}
-            style={{
-              display: "block",
-              maxWidth: "92vw",
-              maxHeight: "84vh",
-              width: "auto",
-              height: "auto",
-              borderRadius: 4,
-              opacity: imgLoaded ? 1 : 0,
-              transition: "opacity var(--duration-base) var(--ease-standard)",
-            }}
-          />
+          {item.isVideo ? (
+            <video
+              src={item.url}
+              controls
+              autoPlay
+              playsInline
+              onLoadedData={() => setImgLoaded(true)}
+              style={{
+                display: "block",
+                maxWidth: "92vw",
+                maxHeight: "84vh",
+                width: "auto",
+                height: "auto",
+                borderRadius: 4,
+                opacity: imgLoaded ? 1 : 0,
+                transition: "opacity var(--duration-base) var(--ease-standard)",
+              }}
+            />
+          ) : (
+            <img
+              src={item.url}
+              alt={item.uploader ? `Foto dari ${item.uploader}` : "Foto tamu"}
+              onLoad={() => setImgLoaded(true)}
+              style={{
+                display: "block",
+                maxWidth: "92vw",
+                maxHeight: "84vh",
+                width: "auto",
+                height: "auto",
+                borderRadius: 4,
+                opacity: imgLoaded ? 1 : 0,
+                transition: "opacity var(--duration-base) var(--ease-standard)",
+              }}
+            />
+          )}
         </div>
 
         {/* Desktop next arrow */}

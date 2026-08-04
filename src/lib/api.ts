@@ -154,14 +154,27 @@ export function relativeTime(createdAt: number): string {
 
 /* ── Slideshow ─────────────────────────────────────── */
 
+export interface SlideshowSettings {
+  durationMs: number
+  shuffle: boolean
+}
+
 export async function fetchSlideshow(): Promise<{
   items: MediaItem[]
   wishes: GuestbookEntry[]
+  settings: SlideshowSettings
 }> {
   const res = await request("/slideshow")
   if (!res.ok) throw new Error(await errorMessage(res, "Gagal memuat slideshow."))
   const body = await res.json()
-  return { items: body.items ?? [], wishes: body.wishes ?? [] }
+  return {
+    items: body.items ?? [],
+    wishes: body.wishes ?? [],
+    settings: {
+      durationMs: body.settings?.durationMs ?? 7000,
+      shuffle: body.settings?.shuffle ?? false,
+    },
+  }
 }
 
 /* ── Admin ─────────────────────────────────────────── */
@@ -297,6 +310,10 @@ export interface EventSettings {
   eventLocation: string
   coverUrl: string
   coverPath: string | null
+  galleryRequiresApproval: boolean
+  slideshowDurationMs: number
+  slideshowShuffle: boolean
+  slideshowShowWishes: boolean
 }
 
 /** Used until the real settings arrive so headings are never blank. */
@@ -307,6 +324,10 @@ export const FALLBACK_EVENT: EventSettings = {
   coverUrl:
     "https://images.unsplash.com/photo-1650377509454-1bbd8392e122?w=800&h=450&fit=crop&auto=format",
   coverPath: null,
+  galleryRequiresApproval: false,
+  slideshowDurationMs: 7000,
+  slideshowShuffle: false,
+  slideshowShowWishes: true,
 }
 
 export async function fetchEventSettings(): Promise<EventSettings> {
@@ -316,11 +337,11 @@ export async function fetchEventSettings(): Promise<EventSettings> {
   return { ...FALLBACK_EVENT, ...(body.event ?? {}) }
 }
 
-export async function adminUpdateEvent(input: {
-  coupleNames: string
-  eventDate: string
-  eventLocation: string
-}): Promise<EventSettings> {
+export async function adminUpdateEvent(
+  input: Partial<Omit<EventSettings, "coverUrl" | "coverPath">> & {
+    coupleNames: string
+  },
+): Promise<EventSettings> {
   const res = await adminRequest("/admin/event", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -338,4 +359,45 @@ export async function adminUploadCover(file: File): Promise<EventSettings> {
   if (!res.ok) throw new Error(await errorMessage(res, "Gagal mengunggah foto sampul."))
   const body = await res.json()
   return { ...FALLBACK_EVENT, ...(body.event ?? {}) }
+}
+
+/* ── Bulk admin actions ────────────────────────────── */
+
+async function bulkAction(path: string, body: object): Promise<void> {
+  const res = await adminRequest(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(await errorMessage(res, "Gagal memproses pilihan."))
+}
+
+export function adminBulkMediaApproval(ids: string[], approved: boolean) {
+  return bulkAction("/admin/media/bulk-approval", { ids, approved })
+}
+
+export function adminBulkDeleteMedia(ids: string[]) {
+  return bulkAction("/admin/media/bulk-delete", { ids })
+}
+
+export function adminBulkGuestbookApproval(ids: string[], approved: boolean) {
+  return bulkAction("/admin/guestbook/bulk-approval", { ids, approved })
+}
+
+export function adminBulkDeleteGuestbook(ids: string[]) {
+  return bulkAction("/admin/guestbook/bulk-delete", { ids })
+}
+
+/** Changes the shared admin passcode and re-arms the current session. */
+export async function adminChangePasscode(
+  currentPasscode: string,
+  nextPasscode: string,
+): Promise<void> {
+  const res = await adminRequest("/admin/passcode", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ currentPasscode, nextPasscode }),
+  })
+  if (!res.ok) throw new Error(await errorMessage(res, "Gagal mengubah kode admin."))
+  setAdminPasscode(nextPasscode)
 }

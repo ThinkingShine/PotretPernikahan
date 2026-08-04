@@ -22,6 +22,11 @@ const DEFAULT_EVENT = {
   coverUrl:
     "https://images.unsplash.com/photo-1650377509454-1bbd8392e122?w=800&h=450&fit=crop&auto=format",
   coverPath: null as string | null,
+  // false keeps the original behaviour: uploads appear in the gallery at once.
+  galleryRequiresApproval: false,
+  slideshowDurationMs: 7000,
+  slideshowShuffle: false,
+  slideshowShowWishes: true,
 };
 
 async function readEvent() {
@@ -110,8 +115,14 @@ app.post(`${BASE}/admin-login`, async (c) => {
 
 app.get(`${BASE}/media`, async (c) => {
   try {
-    const items = await kv.getByPrefix("media:");
-    items.sort((a, b) => (b?.createdAt ?? 0) - (a?.createdAt ?? 0));
+    const [all, event] = await Promise.all([
+      kv.getByPrefix("media:"),
+      readEvent(),
+    ]);
+    const items = (event.galleryRequiresApproval
+      ? all.filter((m) => m?.approved)
+      : all
+    ).sort((a, b) => (b?.createdAt ?? 0) - (a?.createdAt ?? 0));
     return c.json({ items });
   } catch (err) {
     console.log("Failed to list media:", err);
@@ -222,17 +233,27 @@ app.post(`${BASE}/guestbook`, async (c) => {
 
 app.get(`${BASE}/slideshow`, async (c) => {
   try {
-    const [media, entries] = await Promise.all([
+    const [media, entries, event] = await Promise.all([
       kv.getByPrefix("media:"),
       kv.getByPrefix("guestbook:"),
+      readEvent(),
     ]);
     const items = media
       .filter((m) => m?.approved)
       .sort((a, b) => (b?.createdAt ?? 0) - (a?.createdAt ?? 0));
-    const wishes = entries
-      .filter((e) => e?.approved)
-      .sort((a, b) => (b?.createdAt ?? 0) - (a?.createdAt ?? 0));
-    return c.json({ items, wishes });
+    const wishes = event.slideshowShowWishes
+      ? entries
+          .filter((e) => e?.approved)
+          .sort((a, b) => (b?.createdAt ?? 0) - (a?.createdAt ?? 0))
+      : [];
+    return c.json({
+      items,
+      wishes,
+      settings: {
+        durationMs: event.slideshowDurationMs,
+        shuffle: event.slideshowShuffle,
+      },
+    });
   } catch (err) {
     console.log("Failed to load slideshow:", err);
     return c.json({ error: "Gagal memuat slideshow." }, 500);
@@ -367,6 +388,23 @@ app.post(`${BASE}/admin/event`, async (c) => {
         typeof body.eventLocation === "string"
           ? body.eventLocation.trim().slice(0, 60)
           : current.eventLocation,
+      galleryRequiresApproval:
+        typeof body.galleryRequiresApproval === "boolean"
+          ? body.galleryRequiresApproval
+          : current.galleryRequiresApproval,
+      slideshowShuffle:
+        typeof body.slideshowShuffle === "boolean"
+          ? body.slideshowShuffle
+          : current.slideshowShuffle,
+      slideshowShowWishes:
+        typeof body.slideshowShowWishes === "boolean"
+          ? body.slideshowShowWishes
+          : current.slideshowShowWishes,
+      slideshowDurationMs:
+        typeof body.slideshowDurationMs === "number" &&
+        Number.isFinite(body.slideshowDurationMs)
+          ? Math.min(60000, Math.max(2000, Math.round(body.slideshowDurationMs)))
+          : current.slideshowDurationMs,
     };
     await kv.set("config:event", updated);
     return c.json({ event: updated });
@@ -422,6 +460,119 @@ app.post(`${BASE}/admin/event/cover`, async (c) => {
   } catch (err) {
     console.log("Failed to set cover:", err);
     return c.json({ error: "Gagal mengunggah foto sampul." }, 500);
+  }
+});
+
+/* ── Bulk admin actions ────────────────────────────── */
+
+function idsFrom(body: any): string[] {
+  return Array.isArray(body?.ids)
+    ? body.ids.filter((v: unknown) => typeof v === "string").slice(0, 500)
+    : [];
+}
+
+app.post(`${BASE}/admin/media/bulk-approval`, async (c) => {
+  try {
+    const body = await c.req.json().catch(() => null);
+    const ids = idsFrom(body);
+    const approved = body?.approved === true;
+    if (ids.length === 0) return c.json({ error: "Tidak ada item dipilih." }, 400);
+
+    let changed = 0;
+    for (const id of ids) {
+      const item = await kv.get(`media:${id}`);
+      if (!item) continue;
+      await kv.set(`media:${id}`, { ...item, approved });
+      changed++;
+    }
+    return c.json({ changed });
+  } catch (err) {
+    console.log("Bulk media approval failed:", err);
+    return c.json({ error: "Gagal memperbarui status." }, 500);
+  }
+});
+
+app.post(`${BASE}/admin/media/bulk-delete`, async (c) => {
+  try {
+    const body = await c.req.json().catch(() => null);
+    const ids = idsFrom(body);
+    if (ids.length === 0) return c.json({ error: "Tidak ada item dipilih." }, 400);
+
+    const supabase = admin();
+    const paths: string[] = [];
+    for (const id of ids) {
+      const item = await kv.get(`media:${id}`);
+      if (!item) continue;
+      if (item.path) paths.push(item.path);
+      await kv.del(`media:${id}`);
+    }
+    if (paths.length > 0) {
+      const { error } = await supabase.storage.from(BUCKET).remove(paths);
+      if (error) console.log("Bulk storage remove failed:", error);
+    }
+    return c.json({ deleted: ids.length });
+  } catch (err) {
+    console.log("Bulk media delete failed:", err);
+    return c.json({ error: "Gagal menghapus media." }, 500);
+  }
+});
+
+app.post(`${BASE}/admin/guestbook/bulk-approval`, async (c) => {
+  try {
+    const body = await c.req.json().catch(() => null);
+    const ids = idsFrom(body);
+    const approved = body?.approved === true;
+    if (ids.length === 0) return c.json({ error: "Tidak ada item dipilih." }, 400);
+
+    let changed = 0;
+    for (const id of ids) {
+      const entry = await kv.get(`guestbook:${id}`);
+      if (!entry) continue;
+      await kv.set(`guestbook:${id}`, { ...entry, approved });
+      changed++;
+    }
+    return c.json({ changed });
+  } catch (err) {
+    console.log("Bulk guestbook approval failed:", err);
+    return c.json({ error: "Gagal memperbarui status." }, 500);
+  }
+});
+
+app.post(`${BASE}/admin/guestbook/bulk-delete`, async (c) => {
+  try {
+    const body = await c.req.json().catch(() => null);
+    const ids = idsFrom(body);
+    if (ids.length === 0) return c.json({ error: "Tidak ada item dipilih." }, 400);
+    for (const id of ids) await kv.del(`guestbook:${id}`);
+    return c.json({ deleted: ids.length });
+  } catch (err) {
+    console.log("Bulk guestbook delete failed:", err);
+    return c.json({ error: "Gagal menghapus ucapan." }, 500);
+  }
+});
+
+/* ── Change passcode ───────────────────────────────── */
+
+app.post(`${BASE}/admin/passcode`, async (c) => {
+  try {
+    const body = await c.req.json().catch(() => null);
+    const current = typeof body?.currentPasscode === "string" ? body.currentPasscode : "";
+    const next = typeof body?.nextPasscode === "string" ? body.nextPasscode.trim() : "";
+
+    // Re-check the old code even though the route is already guarded, so a
+    // walk-up to an unlocked dashboard cannot silently change the lock.
+    if (!(await isAdmin(current))) {
+      return c.json({ error: "Kode admin saat ini tidak sesuai." }, 401);
+    }
+    if (next.length < 8) {
+      return c.json({ error: "Kode baru minimal 8 karakter." }, 400);
+    }
+
+    await kv.set("config:admin", { passcodeHash: await sha256Hex(next) });
+    return c.json({ ok: true });
+  } catch (err) {
+    console.log("Failed to change passcode:", err);
+    return c.json({ error: "Gagal mengubah kode admin." }, 500);
   }
 });
 

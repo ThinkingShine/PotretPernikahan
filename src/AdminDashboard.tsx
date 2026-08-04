@@ -1,16 +1,15 @@
-import { useState, useEffect, useCallback, useRef, type CSSProperties } from "react"
+import { useState, useEffect, useCallback, type CSSProperties } from "react"
 import { Button } from "./components/Button"
 import { Skeleton } from "./components/Skeleton"
+import { EventSettingsForm, InvitePanel, PasscodePanel } from "./AdminSettings"
 import {
-  adminDeleteGuestbookEntry,
-  adminDeleteMedia,
+  adminBulkDeleteGuestbook,
+  adminBulkDeleteMedia,
+  adminBulkGuestbookApproval,
+  adminBulkMediaApproval,
   adminFetchGuestbook,
   adminFetchMedia,
   adminLogin,
-  adminSetGuestbookApproval,
-  adminSetMediaApproval,
-  adminUpdateEvent,
-  adminUploadCover,
   downloadTextFile,
   fetchEventSettings,
   FALLBACK_EVENT,
@@ -25,7 +24,10 @@ import {
   type MediaItem,
 } from "./lib/api"
 
-type Tab = "media" | "guestbook" | "event"
+type Tab = "media" | "guestbook" | "event" | "invite" | "security"
+type StatusFilter = "semua" | "tayang" | "belum"
+type TypeFilter = "semua" | "foto" | "video"
+type SortOrder = "terbaru" | "terlama"
 
 /** Gap between triggered downloads so the browser queues them reliably. */
 const BULK_DELAY_MS = 800
@@ -167,11 +169,16 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
   const [tab, setTab] = useState<Tab>("media")
   const [media, setMedia] = useState<MediaItem[]>([])
   const [entries, setEntries] = useState<GuestbookEntry[]>([])
+  const [event, setEvent] = useState<EventSettings>(FALLBACK_EVENT)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [busyId, setBusyId] = useState<string | null>(null)
+  const [working, setWorking] = useState(false)
   const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null)
-  const [event, setEvent] = useState<EventSettings>(FALLBACK_EVENT)
+
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("semua")
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("semua")
+  const [sortOrder, setSortOrder] = useState<SortOrder>("terbaru")
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -185,6 +192,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
       setMedia(m)
       setEntries(g)
       setEvent(ev)
+      setSelected(new Set())
     } catch (err) {
       const message = err instanceof Error ? err.message : "Gagal memuat data."
       setError(message)
@@ -202,89 +210,120 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
     load()
   }, [load])
 
-  async function toggleMedia(item: MediaItem) {
-    setBusyId(item.id)
+  // Selection is per-tab, so switching tabs clears it to avoid acting on
+  // items the admin can no longer see.
+  useEffect(() => {
+    setSelected(new Set())
+  }, [tab])
+
+  /* ── Derived lists ── */
+
+  const visibleMedia = applySort(
+    media.filter(m => {
+      if (statusFilter === "tayang" && !m.approved) return false
+      if (statusFilter === "belum" && m.approved) return false
+      if (typeFilter === "foto" && m.isVideo) return false
+      if (typeFilter === "video" && !m.isVideo) return false
+      return true
+    }),
+    sortOrder,
+  )
+
+  const visibleEntries = applySort(
+    entries.filter(e => {
+      if (statusFilter === "tayang" && !e.approved) return false
+      if (statusFilter === "belum" && e.approved) return false
+      return true
+    }),
+    sortOrder,
+  )
+
+  const currentList: { id: string }[] = tab === "guestbook" ? visibleEntries : visibleMedia
+  const allSelected = currentList.length > 0 && currentList.every(i => selected.has(i.id))
+
+  function toggleSelect(id: string) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function toggleSelectAll() {
+    setSelected(allSelected ? new Set() : new Set(currentList.map(i => i.id)))
+  }
+
+  /* ── Bulk actions ── */
+
+  async function run(action: () => Promise<void>) {
+    setWorking(true)
+    setError(null)
     try {
-      const updated = await adminSetMediaApproval(item.id, !item.approved)
-      setMedia(prev => prev.map(m => (m.id === item.id ? updated : m)))
+      await action()
+      await load()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal memperbarui status.")
+      setError(err instanceof Error ? err.message : "Gagal memproses pilihan.")
     } finally {
-      setBusyId(null)
+      setWorking(false)
     }
   }
 
-  async function removeMedia(item: MediaItem) {
-    if (!confirm(`Hapus media ini secara permanen?`)) return
-    setBusyId(item.id)
-    try {
-      await adminDeleteMedia(item.id)
-      setMedia(prev => prev.filter(m => m.id !== item.id))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal menghapus media.")
-    } finally {
-      setBusyId(null)
-    }
+  const ids = [...selected]
+
+  function bulkApprove(approved: boolean) {
+    if (ids.length === 0) return
+    run(() =>
+      tab === "guestbook"
+        ? adminBulkGuestbookApproval(ids, approved)
+        : adminBulkMediaApproval(ids, approved),
+    )
   }
 
-  async function toggleEntry(entry: GuestbookEntry) {
-    setBusyId(entry.id)
-    try {
-      const updated = await adminSetGuestbookApproval(entry.id, !entry.approved)
-      setEntries(prev => prev.map(e => (e.id === entry.id ? updated : e)))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal memperbarui status.")
-    } finally {
-      setBusyId(null)
-    }
+  function bulkDelete() {
+    if (ids.length === 0) return
+    const what = tab === "guestbook" ? "ucapan" : "media"
+    if (!confirm(`Hapus ${ids.length} ${what} secara permanen? Tindakan ini tidak bisa dibatalkan.`)) return
+    run(() =>
+      tab === "guestbook" ? adminBulkDeleteGuestbook(ids) : adminBulkDeleteMedia(ids),
+    )
   }
 
-  async function removeEntry(entry: GuestbookEntry) {
-    if (!confirm(`Hapus ucapan dari ${entry.author}?`)) return
-    setBusyId(entry.id)
-    try {
-      await adminDeleteGuestbookEntry(entry.id)
-      setEntries(prev => prev.filter(e => e.id !== entry.id))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal menghapus ucapan.")
-    } finally {
-      setBusyId(null)
-    }
-  }
+  /* ── Downloads ── */
 
   /**
    * Triggers each file as its own download. Browsers ask once to allow
    * multiple downloads, then handle the rest, which keeps large videos
    * streaming to disk instead of through page memory.
    */
-  async function downloadAllMedia() {
-    if (media.length === 0) return
+  async function downloadMediaFiles(list: MediaItem[]) {
+    if (list.length === 0) return
     if (
       !confirm(
-        `Unduh ${media.length} berkas? Browser mungkin meminta izin untuk mengunduh beberapa berkas sekaligus.`,
+        `Unduh ${list.length} berkas? Browser mungkin meminta izin untuk mengunduh beberapa berkas sekaligus.`,
       )
     ) {
       return
     }
-    for (let i = 0; i < media.length; i++) {
+    for (let i = 0; i < list.length; i++) {
       const link = document.createElement("a")
-      link.href = mediaDownloadUrl(media[i])
+      link.href = mediaDownloadUrl(list[i])
       link.download = ""
       document.body.appendChild(link)
       link.click()
       link.remove()
-      setBulk({ done: i + 1, total: media.length })
-      if (i < media.length - 1) {
+      setBulk({ done: i + 1, total: list.length })
+      if (i < list.length - 1) {
         await new Promise(resolve => setTimeout(resolve, BULK_DELAY_MS))
       }
     }
     setTimeout(() => setBulk(null), 1500)
   }
 
-  function downloadMediaList() {
+  function downloadMediaList(list: MediaItem[]) {
     const rows: (string | number)[][] = [
       ["Nama Pengunggah", "Tipe", "Tayang di Slideshow", "Waktu Unggah", "Tautan Unduh"],
-      ...media.map(m => [
+      ...list.map(m => [
         m.uploader ?? "Tanpa nama",
         m.isVideo ? "Video" : "Foto",
         m.approved ? "Ya" : "Tidak",
@@ -295,10 +334,10 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
     downloadTextFile("daftar-media-potret-pernikahan.csv", toCsv(rows))
   }
 
-  function downloadWishes() {
+  function downloadWishes(list: GuestbookEntry[]) {
     const rows: (string | number)[][] = [
       ["Nama", "Ucapan", "Tayang di Slideshow", "Waktu"],
-      ...entries.map(e => [
+      ...list.map(e => [
         e.author,
         e.message,
         e.approved ? "Ya" : "Tidak",
@@ -310,15 +349,10 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
 
   const approvedMedia = media.filter(m => m.approved).length
   const approvedWishes = entries.filter(e => e.approved).length
+  const isModerationTab = tab === "media" || tab === "guestbook"
 
   return (
-    <div
-      style={{
-        minHeight: "100dvh",
-        backgroundColor: "var(--color-canvas)",
-        fontFamily: "var(--font-body)",
-      }}
-    >
+    <div style={{ minHeight: "100dvh", backgroundColor: "var(--color-canvas)", fontFamily: "var(--font-body)" }}>
       {/* Header */}
       <header
         style={{
@@ -330,26 +364,9 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
           zIndex: 40,
         }}
       >
-        <div
-          style={{
-            maxWidth: 1120,
-            margin: "0 auto",
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            flexWrap: "wrap",
-          }}
-        >
+        <div style={{ maxWidth: 1120, margin: "0 auto", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <div style={{ flex: 1, minWidth: 180 }}>
-            <p
-              style={{
-                margin: 0,
-                fontSize: "var(--text-h3-size)",
-                fontWeight: "var(--text-h3-w)",
-                color: "var(--color-ink-900)",
-                lineHeight: 1.2,
-              }}
-            >
+            <p style={{ margin: 0, fontSize: "var(--text-h3-size)", fontWeight: "var(--text-h3-w)", color: "var(--color-ink-900)", lineHeight: 1.2 }}>
               Dashboard Admin
             </p>
             <p style={{ margin: 0, fontSize: "var(--text-caption-size)", color: "var(--color-ink-500)", lineHeight: 1.4 }}>
@@ -371,7 +388,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
         </div>
 
         {/* Tabs */}
-        <div style={{ maxWidth: 1120, margin: "12px auto 0", display: "flex", gap: 4 }}>
+        <div style={{ maxWidth: 1120, margin: "12px auto 0", display: "flex", gap: 4, overflowX: "auto" }}>
           <TabButton active={tab === "media"} onClick={() => setTab("media")}>
             Foto &amp; Video ({media.length})
           </TabButton>
@@ -381,76 +398,55 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
           <TabButton active={tab === "event"} onClick={() => setTab("event")}>
             Acara
           </TabButton>
+          <TabButton active={tab === "invite"} onClick={() => setTab("invite")}>
+            Undangan QR
+          </TabButton>
+          <TabButton active={tab === "security"} onClick={() => setTab("security")}>
+            Keamanan
+          </TabButton>
         </div>
       </header>
 
       <main style={{ maxWidth: 1120, margin: "0 auto", padding: "20px var(--space-screen-edge) 64px" }}>
-        {tab !== "event" && (
-        <p
-          style={{
-            margin: "0 0 16px",
-            fontSize: "var(--text-caption-size)",
-            lineHeight: "var(--text-caption-lh)",
-            color: "var(--color-ink-500)",
-          }}
-        >
-          Tandai <strong style={{ color: "var(--color-ink-700)" }}>Tayang</strong> agar item muncul di slideshow layar besar.
-          Item yang tidak ditandai tetap ada di galeri, tetapi tidak ikut tampil.
-        </p>
-        )}
+        {isModerationTab && !loading && (
+          <>
+            <p style={{ margin: "0 0 16px", fontSize: "var(--text-caption-size)", lineHeight: "var(--text-caption-lh)", color: "var(--color-ink-500)" }}>
+              Tandai <strong style={{ color: "var(--color-ink-700)" }}>Tayang</strong> agar item muncul di slideshow layar besar.
+              {event.galleryRequiresApproval
+                ? " Moderasi galeri aktif: foto yang belum ditandai juga tidak terlihat tamu."
+                : " Item yang tidak ditandai tetap ada di galeri, tetapi tidak ikut tampil."}
+            </p>
 
-        {/* Export toolbar */}
-        {tab !== "event" && (
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            alignItems: "center",
-            gap: 8,
-            marginBottom: 16,
-            paddingBottom: 16,
-            borderBottom: "1px solid var(--color-ink-100)",
-          }}
-        >
-          {tab === "media" ? (
-            <>
-              <Button
-                variant="secondary"
-                size="small"
-                disabled={media.length === 0 || bulk !== null}
-                onClick={downloadAllMedia}
-              >
-                Unduh Semua Media ({media.length})
-              </Button>
-              <Button
-                variant="ghost"
-                size="small"
-                disabled={media.length === 0}
-                onClick={downloadMediaList}
-              >
-                Daftar Media (CSV)
-              </Button>
-            </>
-          ) : (
-            <Button
-              variant="secondary"
-              size="small"
-              disabled={entries.length === 0}
-              onClick={downloadWishes}
-            >
-              Unduh Ucapan (CSV, {entries.length})
-            </Button>
-          )}
-
-          {bulk && (
-            <span
-              role="status"
-              style={{ fontSize: "var(--text-caption-size)", color: "var(--color-ink-500)" }}
-            >
-              Mengunduh {bulk.done} dari {bulk.total}…
-            </span>
-          )}
-        </div>
+            <Controls
+              tab={tab}
+              statusFilter={statusFilter}
+              setStatusFilter={setStatusFilter}
+              typeFilter={typeFilter}
+              setTypeFilter={setTypeFilter}
+              sortOrder={sortOrder}
+              setSortOrder={setSortOrder}
+              shownCount={currentList.length}
+              allSelected={allSelected}
+              onToggleAll={toggleSelectAll}
+              selectedCount={ids.length}
+              working={working}
+              onApprove={() => bulkApprove(true)}
+              onHide={() => bulkApprove(false)}
+              onDelete={bulkDelete}
+              onDownloadFiles={
+                tab === "media"
+                  ? () =>
+                      downloadMediaFiles(
+                        ids.length > 0 ? visibleMedia.filter(m => selected.has(m.id)) : visibleMedia,
+                      )
+                  : undefined
+              }
+              onDownloadCsv={() =>
+                tab === "media" ? downloadMediaList(visibleMedia) : downloadWishes(visibleEntries)
+              }
+              bulk={bulk}
+            />
+          </>
         )}
 
         {error && (
@@ -478,39 +474,234 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
           </div>
         ) : tab === "event" ? (
           <EventSettingsForm event={event} onSaved={setEvent} />
+        ) : tab === "invite" ? (
+          <InvitePanel coupleNames={event.coupleNames} />
+        ) : tab === "security" ? (
+          <PasscodePanel />
         ) : tab === "media" ? (
-          media.length === 0 ? (
-            <EmptyNote>Belum ada foto atau video yang diunggah tamu.</EmptyNote>
+          visibleMedia.length === 0 ? (
+            <EmptyNote>
+              {media.length === 0
+                ? "Belum ada foto atau video yang diunggah tamu."
+                : "Tidak ada item yang cocok dengan filter."}
+            </EmptyNote>
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 16 }}>
-              {media.map(item => (
+              {visibleMedia.map(item => (
                 <MediaCard
                   key={item.id}
                   item={item}
-                  busy={busyId === item.id}
-                  onToggle={() => toggleMedia(item)}
-                  onDelete={() => removeMedia(item)}
+                  selected={selected.has(item.id)}
+                  onSelect={() => toggleSelect(item.id)}
                 />
               ))}
             </div>
           )
-        ) : entries.length === 0 ? (
-          <EmptyNote>Belum ada ucapan dari tamu.</EmptyNote>
+        ) : visibleEntries.length === 0 ? (
+          <EmptyNote>
+            {entries.length === 0
+              ? "Belum ada ucapan dari tamu."
+              : "Tidak ada ucapan yang cocok dengan filter."}
+          </EmptyNote>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 720 }}>
-            {entries.map(entry => (
+            {visibleEntries.map(entry => (
               <EntryRow
                 key={entry.id}
                 entry={entry}
-                busy={busyId === entry.id}
-                onToggle={() => toggleEntry(entry)}
-                onDelete={() => removeEntry(entry)}
+                selected={selected.has(entry.id)}
+                onSelect={() => toggleSelect(entry.id)}
               />
             ))}
           </div>
         )}
       </main>
     </div>
+  )
+}
+
+function applySort<T extends { createdAt: number }>(list: T[], order: SortOrder): T[] {
+  return [...list].sort((a, b) =>
+    order === "terbaru" ? b.createdAt - a.createdAt : a.createdAt - b.createdAt,
+  )
+}
+
+/* ─────────────────────────────────────────
+   CONTROL BAR
+───────────────────────────────────────── */
+function Controls({
+  tab,
+  statusFilter,
+  setStatusFilter,
+  typeFilter,
+  setTypeFilter,
+  sortOrder,
+  setSortOrder,
+  shownCount,
+  allSelected,
+  onToggleAll,
+  selectedCount,
+  working,
+  onApprove,
+  onHide,
+  onDelete,
+  onDownloadFiles,
+  onDownloadCsv,
+  bulk,
+}: {
+  tab: Tab
+  statusFilter: StatusFilter
+  setStatusFilter: (v: StatusFilter) => void
+  typeFilter: TypeFilter
+  setTypeFilter: (v: TypeFilter) => void
+  sortOrder: SortOrder
+  setSortOrder: (v: SortOrder) => void
+  shownCount: number
+  allSelected: boolean
+  onToggleAll: () => void
+  selectedCount: number
+  working: boolean
+  onApprove: () => void
+  onHide: () => void
+  onDelete: () => void
+  onDownloadFiles?: () => void
+  onDownloadCsv: () => void
+  bulk: { done: number; total: number } | null
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+        marginBottom: 16,
+        paddingBottom: 16,
+        borderBottom: "1px solid var(--color-ink-100)",
+      }}
+    >
+      {/* Filters */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+        <Select
+          label="Status"
+          value={statusFilter}
+          onChange={v => setStatusFilter(v as StatusFilter)}
+          options={[
+            { value: "semua", label: "Semua status" },
+            { value: "belum", label: "Belum disetujui" },
+            { value: "tayang", label: "Sudah tayang" },
+          ]}
+        />
+        {tab === "media" && (
+          <Select
+            label="Tipe"
+            value={typeFilter}
+            onChange={v => setTypeFilter(v as TypeFilter)}
+            options={[
+              { value: "semua", label: "Semua tipe" },
+              { value: "foto", label: "Foto saja" },
+              { value: "video", label: "Video saja" },
+            ]}
+          />
+        )}
+        <Select
+          label="Urutan"
+          value={sortOrder}
+          onChange={v => setSortOrder(v as SortOrder)}
+          options={[
+            { value: "terbaru", label: "Terbaru dulu" },
+            { value: "terlama", label: "Terlama dulu" },
+          ]}
+        />
+        <span style={{ fontSize: "var(--text-caption-size)", color: "var(--color-ink-500)" }}>
+          {shownCount} ditampilkan
+        </span>
+      </div>
+
+      {/* Selection + actions */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: "var(--text-caption-size)", color: "var(--color-ink-700)" }}>
+          <input
+            type="checkbox"
+            checked={allSelected}
+            onChange={onToggleAll}
+            style={{ width: 16, height: 16, accentColor: "var(--color-primary-600)", cursor: "pointer" }}
+          />
+          Pilih semua
+        </label>
+
+        {selectedCount > 0 && (
+          <>
+            <span style={{ fontSize: "var(--text-caption-size)", fontWeight: 600, color: "var(--color-primary-600)" }}>
+              {selectedCount} dipilih
+            </span>
+            <Button variant="primary" size="small" disabled={working} onClick={onApprove}>
+              Tayangkan
+            </Button>
+            <Button variant="secondary" size="small" disabled={working} onClick={onHide}>
+              Sembunyikan
+            </Button>
+            <Button variant="danger" size="small" disabled={working} onClick={onDelete}>
+              Hapus
+            </Button>
+          </>
+        )}
+
+        <span style={{ flex: 1 }} />
+
+        {onDownloadFiles && (
+          <Button variant="secondary" size="small" disabled={bulk !== null} onClick={onDownloadFiles}>
+            {selectedCount > 0 ? `Unduh ${selectedCount} Berkas` : "Unduh Semua Media"}
+          </Button>
+        )}
+        <Button variant="ghost" size="small" onClick={onDownloadCsv}>
+          {tab === "media" ? "Daftar Media (CSV)" : "Unduh Ucapan (CSV)"}
+        </Button>
+
+        {bulk && (
+          <span role="status" style={{ fontSize: "var(--text-caption-size)", color: "var(--color-ink-500)" }}>
+            Mengunduh {bulk.done} dari {bulk.total}…
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function Select({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  options: { value: string; label: string }[]
+}) {
+  return (
+    <select
+      aria-label={label}
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      style={{
+        height: 36,
+        paddingLeft: 10,
+        paddingRight: 28,
+        fontSize: "var(--text-caption-size)",
+        fontFamily: "var(--font-body)",
+        color: "var(--color-ink-900)",
+        backgroundColor: "var(--color-surface)",
+        border: "1.5px solid var(--color-ink-300)",
+        borderRadius: "var(--radius-md)",
+        cursor: "pointer",
+      }}
+    >
+      {options.map(o => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
   )
 }
 
@@ -540,6 +731,7 @@ function TabButton({
         border: "none",
         borderBottom: `2px solid ${active ? "var(--color-primary-600)" : "transparent"}`,
         cursor: "pointer",
+        whiteSpace: "nowrap",
       }}
     >
       {children}
@@ -549,15 +741,7 @@ function TabButton({
 
 function EmptyNote({ children }: { children: React.ReactNode }) {
   return (
-    <p
-      style={{
-        textAlign: "center",
-        padding: "64px 24px",
-        margin: 0,
-        color: "var(--color-ink-500)",
-        fontSize: "var(--text-body-size)",
-      }}
-    >
+    <p style={{ textAlign: "center", padding: "64px 24px", margin: 0, color: "var(--color-ink-500)", fontSize: "var(--text-body-size)" }}>
       {children}
     </p>
   )
@@ -565,26 +749,28 @@ function EmptyNote({ children }: { children: React.ReactNode }) {
 
 function MediaCard({
   item,
-  busy,
-  onToggle,
-  onDelete,
+  selected,
+  onSelect,
 }: {
   item: MediaItem
-  busy: boolean
-  onToggle: () => void
-  onDelete: () => void
+  selected: boolean
+  onSelect: () => void
 }) {
   return (
     <div
       style={{
         backgroundColor: "var(--color-surface)",
         borderRadius: "var(--radius-lg)",
-        border: `1px solid ${item.approved ? "var(--color-primary-600)" : "var(--color-ink-100)"}`,
+        border: `2px solid ${
+          selected
+            ? "var(--color-primary-600)"
+            : item.approved
+              ? "rgba(154,106,79,.35)"
+              : "var(--color-ink-100)"
+        }`,
         overflow: "hidden",
         display: "flex",
         flexDirection: "column",
-        opacity: busy ? 0.6 : 1,
-        transition: "opacity var(--duration-fast) var(--ease-standard)",
       }}
     >
       <div style={{ position: "relative", backgroundColor: "var(--color-ink-100)", aspectRatio: "1 / 1" }}>
@@ -604,6 +790,33 @@ function MediaCard({
             style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
           />
         )}
+
+        {/* Select checkbox */}
+        <label
+          style={{
+            position: "absolute",
+            top: 8,
+            right: 8,
+            width: 30,
+            height: 30,
+            borderRadius: "var(--radius-sm)",
+            backgroundColor: "rgba(255,255,255,.9)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "pointer",
+            boxShadow: "var(--shadow-sm)",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onSelect}
+            aria-label="Pilih media ini"
+            style={{ width: 16, height: 16, accentColor: "var(--color-primary-600)", cursor: "pointer" }}
+          />
+        </label>
+
         {item.approved && (
           <span
             style={{
@@ -640,8 +853,8 @@ function MediaCard({
         )}
       </div>
 
-      <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
-        <div>
+      <div style={{ padding: 12, display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <p
             style={{
               margin: 0,
@@ -659,44 +872,29 @@ function MediaCard({
             {relativeTime(item.createdAt)}
           </p>
         </div>
-
-        <div style={{ display: "flex", gap: 8 }}>
-          <Button
-            variant={item.approved ? "secondary" : "primary"}
-            size="small"
-            disabled={busy}
-            onClick={onToggle}
-            style={{ flex: 1, minWidth: 0 }}
-          >
-            {item.approved ? "Sembunyikan" : "Tayangkan"}
-          </Button>
-          <a
-            href={mediaDownloadUrl(item)}
-            download
-            aria-label="Unduh berkas ini"
-            title="Unduh"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              minWidth: 40,
-              height: 40,
-              borderRadius: "var(--radius-md)",
-              border: "1.5px solid var(--color-ink-300)",
-              color: "var(--color-ink-700)",
-              flexShrink: 0,
-            }}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="7 10 12 15 17 10" />
-              <line x1="12" y1="15" x2="12" y2="3" />
-            </svg>
-          </a>
-          <Button variant="danger" size="small" disabled={busy} onClick={onDelete}>
-            Hapus
-          </Button>
-        </div>
+        <a
+          href={mediaDownloadUrl(item)}
+          download
+          aria-label="Unduh berkas ini"
+          title="Unduh"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 36,
+            height: 36,
+            borderRadius: "var(--radius-md)",
+            border: "1.5px solid var(--color-ink-300)",
+            color: "var(--color-ink-700)",
+            flexShrink: 0,
+          }}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+        </a>
       </div>
     </div>
   )
@@ -704,14 +902,12 @@ function MediaCard({
 
 function EntryRow({
   entry,
-  busy,
-  onToggle,
-  onDelete,
+  selected,
+  onSelect,
 }: {
   entry: GuestbookEntry
-  busy: boolean
-  onToggle: () => void
-  onDelete: () => void
+  selected: boolean
+  onSelect: () => void
 }) {
   return (
     <article
@@ -719,251 +915,59 @@ function EntryRow({
         backgroundColor: "var(--color-surface)",
         borderRadius: "var(--radius-lg)",
         padding: 16,
-        border: "1px solid var(--color-ink-100)",
+        border: `1px solid ${selected ? "var(--color-primary-600)" : "var(--color-ink-100)"}`,
         borderLeft: `3px solid ${entry.approved ? "var(--color-primary-600)" : "var(--color-ink-300)"}`,
         display: "flex",
-        flexDirection: "column",
-        gap: 10,
-        opacity: busy ? 0.6 : 1,
-        transition: "opacity var(--duration-fast) var(--ease-standard)",
+        gap: 12,
       }}
     >
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
-        <h3
+      <input
+        type="checkbox"
+        checked={selected}
+        onChange={onSelect}
+        aria-label={`Pilih ucapan dari ${entry.author}`}
+        style={{ width: 16, height: 16, marginTop: 4, accentColor: "var(--color-primary-600)", cursor: "pointer", flexShrink: 0 }}
+      />
+
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+          <h3 style={{ margin: 0, fontSize: "var(--text-h3-size)", fontWeight: "var(--text-h3-w)", color: "var(--color-ink-900)" }}>
+            {entry.author}
+          </h3>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            {entry.approved && (
+              <span
+                style={{
+                  fontSize: "var(--text-micro-size)",
+                  fontWeight: "var(--text-micro-w)",
+                  color: "var(--color-primary-600)",
+                  backgroundColor: "var(--color-primary-100)",
+                  padding: "2px 8px",
+                  borderRadius: "var(--radius-full)",
+                }}
+              >
+                Tayang
+              </span>
+            )}
+            <span style={{ fontSize: "var(--text-caption-size)", color: "var(--color-ink-500)" }}>
+              {relativeTime(entry.createdAt)}
+            </span>
+          </div>
+        </div>
+
+        <p
           style={{
             margin: 0,
-            fontSize: "var(--text-h3-size)",
-            fontWeight: "var(--text-h3-w)",
-            color: "var(--color-ink-900)",
+            fontSize: "var(--text-body-size)",
+            lineHeight: "var(--text-body-lh)",
+            color: "var(--color-ink-700)",
+            wordBreak: "break-word",
           }}
         >
-          {entry.author}
-        </h3>
-        <span style={{ fontSize: "var(--text-caption-size)", color: "var(--color-ink-500)", flexShrink: 0 }}>
-          {relativeTime(entry.createdAt)}
-        </span>
-      </div>
-
-      <p
-        style={{
-          margin: 0,
-          fontSize: "var(--text-body-size)",
-          lineHeight: "var(--text-body-lh)",
-          color: "var(--color-ink-700)",
-          wordBreak: "break-word",
-        }}
-      >
-        {entry.message}
-      </p>
-
-      <div style={{ display: "flex", gap: 8 }}>
-        <Button
-          variant={entry.approved ? "secondary" : "primary"}
-          size="small"
-          disabled={busy}
-          onClick={onToggle}
-        >
-          {entry.approved ? "Sembunyikan" : "Tayangkan"}
-        </Button>
-        <Button variant="danger" size="small" disabled={busy} onClick={onDelete}>
-          Hapus
-        </Button>
+          {entry.message}
+        </p>
       </div>
     </article>
-  )
-}
-
-/* ─────────────────────────────────────────
-   EVENT SETTINGS
-───────────────────────────────────────── */
-function EventSettingsForm({
-  event,
-  onSaved,
-}: {
-  event: EventSettings
-  onSaved: (next: EventSettings) => void
-}) {
-  const [coupleNames, setCoupleNames] = useState(event.coupleNames)
-  const [eventDate, setEventDate] = useState(event.eventDate)
-  const [eventLocation, setEventLocation] = useState(event.eventLocation)
-  const [saving, setSaving] = useState(false)
-  const [uploading, setUploading] = useState(false)
-  const [message, setMessage] = useState<string | null>(null)
-  const [formError, setFormError] = useState<string | null>(null)
-  const coverInputRef = useRef<HTMLInputElement>(null)
-
-  async function save(e: React.FormEvent) {
-    e.preventDefault()
-    if (!coupleNames.trim()) {
-      setFormError("Nama pengantin tidak boleh kosong.")
-      return
-    }
-    setSaving(true)
-    setFormError(null)
-    setMessage(null)
-    try {
-      const next = await adminUpdateEvent({
-        coupleNames: coupleNames.trim(),
-        eventDate: eventDate.trim(),
-        eventLocation: eventLocation.trim(),
-      })
-      onSaved(next)
-      setMessage("Pengaturan tersimpan.")
-    } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Gagal menyimpan pengaturan.")
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function pickCover(file: File | undefined) {
-    if (!file) return
-    setUploading(true)
-    setFormError(null)
-    setMessage(null)
-    try {
-      const next = await adminUploadCover(file)
-      onSaved(next)
-      setMessage("Foto sampul diperbarui.")
-    } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Gagal mengunggah foto sampul.")
-    } finally {
-      setUploading(false)
-    }
-  }
-
-  return (
-    <form onSubmit={save} style={{ maxWidth: 560, display: "flex", flexDirection: "column", gap: 24 }}>
-      {/* Cover */}
-      <section style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        <h2 style={{ margin: 0, fontSize: "var(--text-h3-size)", fontWeight: "var(--text-h3-w)", color: "var(--color-ink-900)" }}>
-          Foto Sampul
-        </h2>
-        <div
-          style={{
-            position: "relative",
-            width: "100%",
-            aspectRatio: "16 / 9",
-            borderRadius: "var(--radius-lg)",
-            overflow: "hidden",
-            backgroundColor: "var(--color-ink-100)",
-            border: "1px solid var(--color-ink-100)",
-          }}
-        >
-          <img
-            src={event.coverUrl}
-            alt="Pratinjau foto sampul"
-            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-          />
-        </div>
-        <input
-          ref={coverInputRef}
-          type="file"
-          accept="image/jpeg,image/png,image/webp"
-          style={{ display: "none" }}
-          onChange={e => {
-            pickCover(e.target.files?.[0])
-            e.target.value = ""
-          }}
-        />
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <Button
-            variant="secondary"
-            size="medium"
-            type="button"
-            loading={uploading}
-            onClick={() => coverInputRef.current?.click()}
-          >
-            {uploading ? "Mengunggah…" : "Ganti Foto Sampul"}
-          </Button>
-          <span style={{ fontSize: "var(--text-caption-size)", color: "var(--color-ink-500)" }}>
-            JPG, PNG atau WebP · maks 10 MB
-          </span>
-        </div>
-      </section>
-
-      {/* Text fields */}
-      <section style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <h2 style={{ margin: 0, fontSize: "var(--text-h3-size)", fontWeight: "var(--text-h3-w)", color: "var(--color-ink-900)" }}>
-          Detail Acara
-        </h2>
-
-        <Field
-          id="ev-couple"
-          label="Nama Pengantin"
-          value={coupleNames}
-          onChange={setCoupleNames}
-          placeholder="Contoh: Dinda & Arya"
-          maxLength={80}
-        />
-        <Field
-          id="ev-date"
-          label="Tanggal"
-          value={eventDate}
-          onChange={setEventDate}
-          placeholder="Contoh: 12 Oktober 2026"
-          maxLength={40}
-        />
-        <Field
-          id="ev-location"
-          label="Lokasi"
-          value={eventLocation}
-          onChange={setEventLocation}
-          placeholder="Contoh: Bandung"
-          maxLength={60}
-        />
-      </section>
-
-      {formError && (
-        <span role="alert" style={{ fontSize: "var(--text-caption-size)", color: "var(--color-danger)" }}>
-          {formError}
-        </span>
-      )}
-      {message && (
-        <span role="status" style={{ fontSize: "var(--text-caption-size)", color: "var(--color-success)" }}>
-          {message}
-        </span>
-      )}
-
-      <div>
-        <Button variant="primary" size="large" type="submit" loading={saving}>
-          {saving ? "Menyimpan…" : "Simpan Perubahan"}
-        </Button>
-      </div>
-    </form>
-  )
-}
-
-function Field({
-  id,
-  label,
-  value,
-  onChange,
-  placeholder,
-  maxLength,
-}: {
-  id: string
-  label: string
-  value: string
-  onChange: (v: string) => void
-  placeholder?: string
-  maxLength?: number
-}) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <label htmlFor={id} style={{ fontSize: "var(--text-caption-size)", fontWeight: 500, color: "var(--color-ink-700)" }}>
-        {label}
-      </label>
-      <input
-        id={id}
-        type="text"
-        value={value}
-        maxLength={maxLength}
-        placeholder={placeholder}
-        onChange={e => onChange(e.target.value)}
-        style={fieldStyle}
-      />
-    </div>
   )
 }
 
