@@ -6,6 +6,7 @@ import {
   createGuestbookEntry,
   fetchGuestbook,
   relativeTime,
+  type EventSettings,
   type GuestbookEntry as ApiGuestbookEntry,
 } from "./lib/api"
 
@@ -30,8 +31,10 @@ function toEntry(entry: ApiGuestbookEntry, isOwn = false): GuestbookEntry {
 }
 
 export default function GuestbookScreen({
+  event,
   onNavigate,
 }: {
+  event: EventSettings
   onNavigate?: (view: "upload" | "gallery" | "guestbook") => void
 }) {
   const [activeNav, setActiveNav] = useState<NavItem>("guestbook")
@@ -93,7 +96,7 @@ export default function GuestbookScreen({
               Ucapan
             </p>
             <p style={{ margin: 0, fontSize: "var(--text-caption-size)", color: "var(--color-ink-500)", lineHeight: 1.4 }}>
-              Dinda & Arya · {entries.length} ucapan
+              {event.coupleNames} · {entries.length} ucapan
             </p>
           </div>
         </div>
@@ -117,7 +120,7 @@ export default function GuestbookScreen({
         ) : loadError ? (
           <FeedError message={loadError} onRetry={load} />
         ) : entries.length === 0 ? (
-          <EmptyFeed onCompose={() => setSheetOpen(true)} />
+          <EmptyFeed coupleNames={event.coupleNames} onCompose={() => setSheetOpen(true)} />
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             {entries.map(entry => (
@@ -333,7 +336,13 @@ function FeedError({ message, onRetry }: { message: string; onRetry: () => void 
 /* ─────────────────────────────────────────
    EMPTY FEED
 ───────────────────────────────────────── */
-function EmptyFeed({ onCompose }: { onCompose: () => void }) {
+function EmptyFeed({
+  coupleNames,
+  onCompose,
+}: {
+  coupleNames: string
+  onCompose: () => void
+}) {
   return (
     <div
       style={{
@@ -380,7 +389,7 @@ function EmptyFeed({ onCompose }: { onCompose: () => void }) {
             maxWidth: "36ch",
           }}
         >
-          Tulis ucapan pertama untuk Dinda & Arya.
+          Tulis ucapan pertama untuk {coupleNames}.
         </p>
       </div>
 

@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react"
 import { Button } from "./components/Button"
 import { Input } from "./components/Input"
 import { BottomNav } from "./components/BottomNav"
-import { uploadMedia } from "./lib/api"
+import { uploadMedia, type EventSettings } from "./lib/api"
 
 type NavItem = "upload" | "gallery" | "guestbook"
 type Step = "pick" | "review" | "done"
@@ -50,8 +50,10 @@ function toUploadFile(file: File): UploadFile {
 }
 
 export default function UploadFlow({
+  event,
   onNavigate,
 }: {
+  event: EventSettings
   onNavigate?: (view: "upload" | "gallery" | "guestbook") => void
 }) {
   const [step, setStep] = useState<Step>("pick")
@@ -221,7 +223,7 @@ export default function UploadFlow({
               {step === "done" && "Selesai"}
             </p>
             <p style={{ fontSize: "var(--text-caption-size)", color: "var(--color-ink-500)", margin: 0, lineHeight: 1.4 }}>
-              Dinda & Arya · 12 Oktober 2026
+              {event.coupleNames} · {event.eventDate}
             </p>
           </div>
 

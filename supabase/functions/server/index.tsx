@@ -13,6 +13,21 @@ const MAX_PHOTO_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
 const MAX_NAME_LEN = 60;
 const MAX_MESSAGE_LEN = 500;
+const MAX_COVER_BYTES = 10 * 1024 * 1024;
+
+const DEFAULT_EVENT = {
+  coupleNames: "Dinda & Arya",
+  eventDate: "12 Oktober 2026",
+  eventLocation: "Bandung",
+  coverUrl:
+    "https://images.unsplash.com/photo-1650377509454-1bbd8392e122?w=800&h=450&fit=crop&auto=format",
+  coverPath: null as string | null,
+};
+
+async function readEvent() {
+  const stored = await kv.get("config:event");
+  return { ...DEFAULT_EVENT, ...(stored ?? {}) };
+}
 
 const admin = () =>
   createClient(
@@ -313,6 +328,100 @@ app.delete(`${BASE}/admin/guestbook/:id`, async (c) => {
   } catch (err) {
     console.log("Failed to delete guestbook entry:", err);
     return c.json({ error: "Gagal menghapus ucapan." }, 500);
+  }
+});
+
+/* ── Event settings ────────────────────────────────── */
+
+app.get(`${BASE}/event`, async (c) => {
+  try {
+    return c.json({ event: await readEvent() });
+  } catch (err) {
+    console.log("Failed to load event settings:", err);
+    return c.json({ error: "Gagal memuat pengaturan acara." }, 500);
+  }
+});
+
+app.post(`${BASE}/admin/event`, async (c) => {
+  try {
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== "object") {
+      return c.json({ error: "Format permintaan tidak sesuai." }, 400);
+    }
+
+    const coupleNames =
+      typeof body.coupleNames === "string" ? body.coupleNames.trim() : "";
+    if (!coupleNames) {
+      return c.json({ error: "Nama pengantin tidak boleh kosong." }, 400);
+    }
+
+    const current = await readEvent();
+    const updated = {
+      ...current,
+      coupleNames: coupleNames.slice(0, 80),
+      eventDate:
+        typeof body.eventDate === "string"
+          ? body.eventDate.trim().slice(0, 40)
+          : current.eventDate,
+      eventLocation:
+        typeof body.eventLocation === "string"
+          ? body.eventLocation.trim().slice(0, 60)
+          : current.eventLocation,
+    };
+    await kv.set("config:event", updated);
+    return c.json({ event: updated });
+  } catch (err) {
+    console.log("Failed to update event settings:", err);
+    return c.json({ error: "Gagal menyimpan pengaturan." }, 500);
+  }
+});
+
+app.post(`${BASE}/admin/event/cover`, async (c) => {
+  try {
+    const body = await c.req.parseBody();
+    const file = body["file"];
+
+    if (!(file instanceof File)) {
+      return c.json({ error: "Tidak ada berkas yang dikirim." }, 400);
+    }
+    if (!file.type.startsWith("image/")) {
+      return c.json({ error: "Foto sampul harus berupa gambar." }, 400);
+    }
+    if (file.size > MAX_COVER_BYTES) {
+      return c.json({ error: "Foto sampul maksimum 10 MB." }, 413);
+    }
+
+    const current = await readEvent();
+    const ext = file.name.includes(".") ? file.name.split(".").pop() : "jpg";
+    // Kept under cover/ so it never shows up in the guest gallery listing.
+    const path = `cover/${crypto.randomUUID()}.${ext}`;
+
+    const supabase = admin();
+    const { error: uploadError } = await supabase.storage
+      .from(BUCKET)
+      .upload(path, file, { contentType: file.type });
+
+    if (uploadError) {
+      console.log("Cover upload failed:", uploadError);
+      return c.json({ error: "Gagal mengunggah foto sampul." }, 500);
+    }
+
+    // Drop the previous cover so replacements do not pile up.
+    if (current.coverPath) {
+      const { error } = await supabase.storage
+        .from(BUCKET)
+        .remove([current.coverPath]);
+      if (error) console.log("Old cover remove failed:", error);
+    }
+
+    const { data: pub } = supabase.storage.from(BUCKET).getPublicUrl(path);
+    const updated = { ...current, coverUrl: pub.publicUrl, coverPath: path };
+    await kv.set("config:event", updated);
+
+    return c.json({ event: updated });
+  } catch (err) {
+    console.log("Failed to set cover:", err);
+    return c.json({ error: "Gagal mengunggah foto sampul." }, 500);
   }
 });
 

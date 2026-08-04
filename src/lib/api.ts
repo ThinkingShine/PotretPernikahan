@@ -288,3 +288,54 @@ export function formatDateTime(createdAt: number): string {
     minute: "2-digit",
   })
 }
+
+/* ── Event settings ────────────────────────────────── */
+
+export interface EventSettings {
+  coupleNames: string
+  eventDate: string
+  eventLocation: string
+  coverUrl: string
+  coverPath: string | null
+}
+
+/** Used until the real settings arrive so headings are never blank. */
+export const FALLBACK_EVENT: EventSettings = {
+  coupleNames: "Dinda & Arya",
+  eventDate: "12 Oktober 2026",
+  eventLocation: "Bandung",
+  coverUrl:
+    "https://images.unsplash.com/photo-1650377509454-1bbd8392e122?w=800&h=450&fit=crop&auto=format",
+  coverPath: null,
+}
+
+export async function fetchEventSettings(): Promise<EventSettings> {
+  const res = await request("/event")
+  if (!res.ok) throw new Error(await errorMessage(res, "Gagal memuat pengaturan acara."))
+  const body = await res.json()
+  return { ...FALLBACK_EVENT, ...(body.event ?? {}) }
+}
+
+export async function adminUpdateEvent(input: {
+  coupleNames: string
+  eventDate: string
+  eventLocation: string
+}): Promise<EventSettings> {
+  const res = await adminRequest("/admin/event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) throw new Error(await errorMessage(res, "Gagal menyimpan pengaturan."))
+  const body = await res.json()
+  return { ...FALLBACK_EVENT, ...(body.event ?? {}) }
+}
+
+export async function adminUploadCover(file: File): Promise<EventSettings> {
+  const form = new FormData()
+  form.append("file", file)
+  const res = await adminRequest("/admin/event/cover", { method: "POST", body: form })
+  if (!res.ok) throw new Error(await errorMessage(res, "Gagal mengunggah foto sampul."))
+  const body = await res.json()
+  return { ...FALLBACK_EVENT, ...(body.event ?? {}) }
+}

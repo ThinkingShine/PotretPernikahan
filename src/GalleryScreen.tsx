@@ -8,14 +8,22 @@ import {
 import { BottomNav } from "./components/BottomNav"
 import { Button } from "./components/Button"
 import { Skeleton } from "./components/Skeleton"
-import { fetchMedia, mediaDownloadUrl, relativeTime, type MediaItem } from "./lib/api"
+import {
+  fetchMedia,
+  mediaDownloadUrl,
+  relativeTime,
+  type EventSettings,
+  type MediaItem,
+} from "./lib/api"
 
 type NavItem = "upload" | "gallery" | "guestbook"
 type Filter = "semua" | "foto" | "video"
 
 export default function GalleryScreen({
+  event,
   onNavigate,
 }: {
+  event: EventSettings
   onNavigate?: (view: "upload" | "gallery" | "guestbook") => void
 }) {
   const [activeNav, setActiveNav] = useState<NavItem>("gallery")
@@ -72,7 +80,7 @@ export default function GalleryScreen({
             </div>
             <div style={{ flex: 1 }}>
               <p style={{ margin: 0, fontSize: "var(--text-h3-size)", fontWeight: "var(--text-h3-w)", color: "var(--color-ink-900)", lineHeight: 1.2 }}>Galeri</p>
-              <p style={{ margin: 0, fontSize: "var(--text-caption-size)", color: "var(--color-ink-500)", lineHeight: 1.4 }}>Dinda & Arya · 12 Oktober 2026</p>
+              <p style={{ margin: 0, fontSize: "var(--text-caption-size)", color: "var(--color-ink-500)", lineHeight: 1.4 }}>{event.coupleNames} · {event.eventDate}</p>
             </div>
           </div>
 

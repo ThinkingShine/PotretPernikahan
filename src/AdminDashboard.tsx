@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, type CSSProperties } from "react"
+import { useState, useEffect, useCallback, useRef, type CSSProperties } from "react"
 import { Button } from "./components/Button"
 import { Skeleton } from "./components/Skeleton"
 import {
@@ -9,18 +9,23 @@ import {
   adminLogin,
   adminSetGuestbookApproval,
   adminSetMediaApproval,
+  adminUpdateEvent,
+  adminUploadCover,
   downloadTextFile,
+  fetchEventSettings,
+  FALLBACK_EVENT,
   formatDateTime,
   getAdminPasscode,
   mediaDownloadUrl,
   relativeTime,
   setAdminPasscode,
   toCsv,
+  type EventSettings,
   type GuestbookEntry,
   type MediaItem,
 } from "./lib/api"
 
-type Tab = "media" | "guestbook"
+type Tab = "media" | "guestbook" | "event"
 
 /** Gap between triggered downloads so the browser queues them reliably. */
 const BULK_DELAY_MS = 800
@@ -166,14 +171,20 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null)
+  const [event, setEvent] = useState<EventSettings>(FALLBACK_EVENT)
 
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const [m, g] = await Promise.all([adminFetchMedia(), adminFetchGuestbook()])
+      const [m, g, ev] = await Promise.all([
+        adminFetchMedia(),
+        adminFetchGuestbook(),
+        fetchEventSettings(),
+      ])
       setMedia(m)
       setEntries(g)
+      setEvent(ev)
     } catch (err) {
       const message = err instanceof Error ? err.message : "Gagal memuat data."
       setError(message)
@@ -367,10 +378,14 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
           <TabButton active={tab === "guestbook"} onClick={() => setTab("guestbook")}>
             Ucapan ({entries.length})
           </TabButton>
+          <TabButton active={tab === "event"} onClick={() => setTab("event")}>
+            Acara
+          </TabButton>
         </div>
       </header>
 
       <main style={{ maxWidth: 1120, margin: "0 auto", padding: "20px var(--space-screen-edge) 64px" }}>
+        {tab !== "event" && (
         <p
           style={{
             margin: "0 0 16px",
@@ -382,8 +397,10 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
           Tandai <strong style={{ color: "var(--color-ink-700)" }}>Tayang</strong> agar item muncul di slideshow layar besar.
           Item yang tidak ditandai tetap ada di galeri, tetapi tidak ikut tampil.
         </p>
+        )}
 
         {/* Export toolbar */}
+        {tab !== "event" && (
         <div
           style={{
             display: "flex",
@@ -434,6 +451,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
             </span>
           )}
         </div>
+        )}
 
         {error && (
           <div
@@ -458,6 +476,8 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
               <Skeleton key={i} height={220} radius="var(--radius-lg)" />
             ))}
           </div>
+        ) : tab === "event" ? (
+          <EventSettingsForm event={event} onSaved={setEvent} />
         ) : tab === "media" ? (
           media.length === 0 ? (
             <EmptyNote>Belum ada foto atau video yang diunggah tamu.</EmptyNote>
@@ -750,6 +770,200 @@ function EntryRow({
         </Button>
       </div>
     </article>
+  )
+}
+
+/* ─────────────────────────────────────────
+   EVENT SETTINGS
+───────────────────────────────────────── */
+function EventSettingsForm({
+  event,
+  onSaved,
+}: {
+  event: EventSettings
+  onSaved: (next: EventSettings) => void
+}) {
+  const [coupleNames, setCoupleNames] = useState(event.coupleNames)
+  const [eventDate, setEventDate] = useState(event.eventDate)
+  const [eventLocation, setEventLocation] = useState(event.eventLocation)
+  const [saving, setSaving] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
+  const coverInputRef = useRef<HTMLInputElement>(null)
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault()
+    if (!coupleNames.trim()) {
+      setFormError("Nama pengantin tidak boleh kosong.")
+      return
+    }
+    setSaving(true)
+    setFormError(null)
+    setMessage(null)
+    try {
+      const next = await adminUpdateEvent({
+        coupleNames: coupleNames.trim(),
+        eventDate: eventDate.trim(),
+        eventLocation: eventLocation.trim(),
+      })
+      onSaved(next)
+      setMessage("Pengaturan tersimpan.")
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Gagal menyimpan pengaturan.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function pickCover(file: File | undefined) {
+    if (!file) return
+    setUploading(true)
+    setFormError(null)
+    setMessage(null)
+    try {
+      const next = await adminUploadCover(file)
+      onSaved(next)
+      setMessage("Foto sampul diperbarui.")
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Gagal mengunggah foto sampul.")
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  return (
+    <form onSubmit={save} style={{ maxWidth: 560, display: "flex", flexDirection: "column", gap: 24 }}>
+      {/* Cover */}
+      <section style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <h2 style={{ margin: 0, fontSize: "var(--text-h3-size)", fontWeight: "var(--text-h3-w)", color: "var(--color-ink-900)" }}>
+          Foto Sampul
+        </h2>
+        <div
+          style={{
+            position: "relative",
+            width: "100%",
+            aspectRatio: "16 / 9",
+            borderRadius: "var(--radius-lg)",
+            overflow: "hidden",
+            backgroundColor: "var(--color-ink-100)",
+            border: "1px solid var(--color-ink-100)",
+          }}
+        >
+          <img
+            src={event.coverUrl}
+            alt="Pratinjau foto sampul"
+            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+          />
+        </div>
+        <input
+          ref={coverInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          style={{ display: "none" }}
+          onChange={e => {
+            pickCover(e.target.files?.[0])
+            e.target.value = ""
+          }}
+        />
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <Button
+            variant="secondary"
+            size="medium"
+            type="button"
+            loading={uploading}
+            onClick={() => coverInputRef.current?.click()}
+          >
+            {uploading ? "Mengunggah…" : "Ganti Foto Sampul"}
+          </Button>
+          <span style={{ fontSize: "var(--text-caption-size)", color: "var(--color-ink-500)" }}>
+            JPG, PNG atau WebP · maks 10 MB
+          </span>
+        </div>
+      </section>
+
+      {/* Text fields */}
+      <section style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <h2 style={{ margin: 0, fontSize: "var(--text-h3-size)", fontWeight: "var(--text-h3-w)", color: "var(--color-ink-900)" }}>
+          Detail Acara
+        </h2>
+
+        <Field
+          id="ev-couple"
+          label="Nama Pengantin"
+          value={coupleNames}
+          onChange={setCoupleNames}
+          placeholder="Contoh: Dinda & Arya"
+          maxLength={80}
+        />
+        <Field
+          id="ev-date"
+          label="Tanggal"
+          value={eventDate}
+          onChange={setEventDate}
+          placeholder="Contoh: 12 Oktober 2026"
+          maxLength={40}
+        />
+        <Field
+          id="ev-location"
+          label="Lokasi"
+          value={eventLocation}
+          onChange={setEventLocation}
+          placeholder="Contoh: Bandung"
+          maxLength={60}
+        />
+      </section>
+
+      {formError && (
+        <span role="alert" style={{ fontSize: "var(--text-caption-size)", color: "var(--color-danger)" }}>
+          {formError}
+        </span>
+      )}
+      {message && (
+        <span role="status" style={{ fontSize: "var(--text-caption-size)", color: "var(--color-success)" }}>
+          {message}
+        </span>
+      )}
+
+      <div>
+        <Button variant="primary" size="large" type="submit" loading={saving}>
+          {saving ? "Menyimpan…" : "Simpan Perubahan"}
+        </Button>
+      </div>
+    </form>
+  )
+}
+
+function Field({
+  id,
+  label,
+  value,
+  onChange,
+  placeholder,
+  maxLength,
+}: {
+  id: string
+  label: string
+  value: string
+  onChange: (v: string) => void
+  placeholder?: string
+  maxLength?: number
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <label htmlFor={id} style={{ fontSize: "var(--text-caption-size)", fontWeight: 500, color: "var(--color-ink-700)" }}>
+        {label}
+      </label>
+      <input
+        id={id}
+        type="text"
+        value={value}
+        maxLength={maxLength}
+        placeholder={placeholder}
+        onChange={e => onChange(e.target.value)}
+        style={fieldStyle}
+      />
+    </div>
   )
 }
 

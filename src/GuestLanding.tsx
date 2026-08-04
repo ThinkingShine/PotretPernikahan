@@ -7,18 +7,17 @@ import {
   fetchMedia,
   relativeTime,
   type GuestbookEntry,
+  type EventSettings,
   type MediaItem,
 } from "./lib/api"
 
 type NavItem = "upload" | "gallery" | "guestbook"
 
-// Cover: Indonesian wedding couple, cropped 16:9
-const COVER_URL =
-  "https://images.unsplash.com/photo-1650377509454-1bbd8392e122?w=800&h=450&fit=crop&auto=format"
-
 export default function GuestLanding({
+  event,
   onNavigate,
 }: {
+  event: EventSettings
   onNavigate?: (view: "upload" | "gallery" | "guestbook") => void
 }) {
   const [activeNav, setActiveNav] = useState<NavItem>("upload")
@@ -71,8 +70,8 @@ export default function GuestLanding({
         }}
       >
         <img
-          src={COVER_URL}
-          alt="Foto sampul pernikahan Dinda dan Arya"
+          src={event.coverUrl}
+          alt={`Foto sampul pernikahan ${event.coupleNames}`}
           // LCP element — no lazy load
           loading="eager"
           fetchPriority="high"
@@ -118,7 +117,7 @@ export default function GuestLanding({
               letterSpacing: "-0.01em",
             }}
           >
-            Dinda &amp; Arya
+            {event.coupleNames}
           </h1>
           <p
             style={{
@@ -128,7 +127,8 @@ export default function GuestLanding({
               margin: "4px 0 0",
             }}
           >
-            12 Oktober 2026 · Bandung
+            {event.eventDate}
+            {event.eventLocation ? ` · ${event.eventLocation}` : ""}
           </p>
         </div>
       </div>
