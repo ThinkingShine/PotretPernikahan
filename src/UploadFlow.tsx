@@ -106,11 +106,22 @@ export default function UploadFlow({
   }
 
   function removeFile(id: string) {
-    setFiles(prev => {
-      const target = prev.find(f => f.id === id)
-      if (target) URL.revokeObjectURL(target.thumb)
-      return prev.filter(f => f.id !== id)
-    })
+    const target = files.find(f => f.id === id)
+    if (target) URL.revokeObjectURL(target.thumb)
+    const next = files.filter(f => f.id !== id)
+    setFiles(next)
+    // Without this the guest is left on an empty review screen whose only
+    // button is a disabled "Kirim 0 File", with no way back to the picker.
+    if (next.length === 0) setStep("pick")
+  }
+
+  function openPicker() {
+    fileInputRef.current?.click()
+  }
+
+  function goBack() {
+    if (step === "pick") onNavigate?.("gallery")
+    else setStep("pick")
   }
 
   async function uploadOne(item: UploadFile): Promise<boolean> {
@@ -192,7 +203,8 @@ export default function UploadFlow({
         >
           {/* Back / logo */}
           <button
-            aria-label="Kembali ke beranda"
+            onClick={goBack}
+            aria-label={step === "pick" ? "Kembali ke galeri" : "Kembali ke pemilihan berkas"}
             style={{
               background: "none",
               border: "none",
@@ -269,6 +281,7 @@ export default function UploadFlow({
             setGuestName={setGuestName}
             onRemove={removeFile}
             onRetry={retryFile}
+            onAddMore={openPicker}
             activeCount={activeCount}
             sending={sending}
             onSubmit={handleSend}
@@ -403,6 +416,7 @@ function ReviewStep({
   setGuestName,
   onRemove,
   onRetry,
+  onAddMore,
   activeCount,
   sending,
   onSubmit,
@@ -412,6 +426,7 @@ function ReviewStep({
   setGuestName: (v: string) => void
   onRemove: (id: string) => void
   onRetry: (id: string) => void
+  onAddMore: () => void
   activeCount: number
   sending: boolean
   onSubmit: () => void
@@ -441,6 +456,11 @@ function ReviewStep({
           onChange={e => setGuestName(e.target.value)}
         />
       </div>
+
+      {/* Add more */}
+      <Button variant="secondary" size="medium" fullWidth disabled={sending} onClick={onAddMore}>
+        Tambah Foto atau Video
+      </Button>
 
       {/* Submit */}
       <Button
