@@ -8,7 +8,7 @@ import {
 import { BottomNav } from "./components/BottomNav"
 import { Button } from "./components/Button"
 import { Skeleton } from "./components/Skeleton"
-import { fetchMedia, relativeTime, type MediaItem } from "./lib/api"
+import { fetchMedia, mediaDownloadUrl, relativeTime, type MediaItem } from "./lib/api"
 
 type NavItem = "upload" | "gallery" | "guestbook"
 type Filter = "semua" | "foto" | "video"
@@ -298,8 +298,6 @@ function Lightbox({
 }) {
   const item = items[index]
   const [imgLoaded, setImgLoaded] = useState(false)
-  const [isFav, setIsFav] = useState(false)
-  const [isHidden, setIsHidden] = useState(false)
   const touchStartX = useRef<number | null>(null)
 
   // Reset loaded state on index change
@@ -469,56 +467,32 @@ function Lightbox({
           </p>
         </div>
 
-        {/* Owner actions */}
+        {/* Download */}
         <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-          {/* Favorite */}
-          <button
-            onClick={() => setIsFav(f => !f)}
-            aria-label={isFav ? "Hapus dari favorit" : "Tandai favorit"}
-            style={{ ...iconBtnStyle, color: isFav ? "#C9A227" : "rgba(255,255,255,0.7)" }}
-            onMouseEnter={e => (e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.1)")}
-            onMouseLeave={e => (e.currentTarget.style.backgroundColor = "transparent")}
+          <a
+            href={mediaDownloadUrl(item)}
+            download
+            aria-label={item.isVideo ? "Unduh video" : "Unduh foto"}
+            style={{
+              ...iconBtnStyle,
+              width: "auto",
+              paddingLeft: 14,
+              paddingRight: 16,
+              gap: 8,
+              textDecoration: "none",
+              fontSize: "var(--text-caption-size)",
+              fontWeight: 600,
+            }}
+            onMouseEnter={e => (e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.18)")}
+            onMouseLeave={e => (e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.08)")}
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill={isFav ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
             </svg>
-          </button>
-
-          {/* Hide from slideshow */}
-          <button
-            onClick={() => setIsHidden(h => !h)}
-            aria-label={isHidden ? "Tampilkan di slideshow" : "Sembunyikan dari slideshow"}
-            style={{ ...iconBtnStyle, color: isHidden ? "var(--color-warning)" : "rgba(255,255,255,0.7)" }}
-            onMouseEnter={e => (e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.1)")}
-            onMouseLeave={e => (e.currentTarget.style.backgroundColor = "transparent")}
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
-              {isHidden ? (
-                <>
-                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
-                  <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
-                  <line x1="1" y1="1" x2="23" y2="23"/>
-                </>
-              ) : (
-                <>
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                  <circle cx="12" cy="12" r="3"/>
-                </>
-              )}
-            </svg>
-          </button>
-
-          {/* Delete */}
-          <button
-            aria-label="Hapus foto"
-            style={{ ...iconBtnStyle, color: "rgba(255,255,255,0.7)" }}
-            onMouseEnter={e => { e.currentTarget.style.backgroundColor = "rgba(168,56,47,0.25)"; e.currentTarget.style.color = "#ff9b9b" }}
-            onMouseLeave={e => { e.currentTarget.style.backgroundColor = "transparent"; e.currentTarget.style.color = "rgba(255,255,255,0.7)" }}
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
-              <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
-            </svg>
-          </button>
+            Unduh
+          </a>
         </div>
       </div>
     </div>

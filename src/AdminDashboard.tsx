@@ -9,14 +9,21 @@ import {
   adminLogin,
   adminSetGuestbookApproval,
   adminSetMediaApproval,
+  downloadTextFile,
+  formatDateTime,
   getAdminPasscode,
+  mediaDownloadUrl,
   relativeTime,
   setAdminPasscode,
+  toCsv,
   type GuestbookEntry,
   type MediaItem,
 } from "./lib/api"
 
 type Tab = "media" | "guestbook"
+
+/** Gap between triggered downloads so the browser queues them reliably. */
+const BULK_DELAY_MS = 800
 
 export default function AdminDashboard() {
   const [authed, setAuthed] = useState(getAdminPasscode() !== null)
@@ -158,6 +165,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -231,6 +239,62 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
     } finally {
       setBusyId(null)
     }
+  }
+
+  /**
+   * Triggers each file as its own download. Browsers ask once to allow
+   * multiple downloads, then handle the rest, which keeps large videos
+   * streaming to disk instead of through page memory.
+   */
+  async function downloadAllMedia() {
+    if (media.length === 0) return
+    if (
+      !confirm(
+        `Unduh ${media.length} berkas? Browser mungkin meminta izin untuk mengunduh beberapa berkas sekaligus.`,
+      )
+    ) {
+      return
+    }
+    for (let i = 0; i < media.length; i++) {
+      const link = document.createElement("a")
+      link.href = mediaDownloadUrl(media[i])
+      link.download = ""
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      setBulk({ done: i + 1, total: media.length })
+      if (i < media.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, BULK_DELAY_MS))
+      }
+    }
+    setTimeout(() => setBulk(null), 1500)
+  }
+
+  function downloadMediaList() {
+    const rows: (string | number)[][] = [
+      ["Nama Pengunggah", "Tipe", "Tayang di Slideshow", "Waktu Unggah", "Tautan Unduh"],
+      ...media.map(m => [
+        m.uploader ?? "Tanpa nama",
+        m.isVideo ? "Video" : "Foto",
+        m.approved ? "Ya" : "Tidak",
+        formatDateTime(m.createdAt),
+        mediaDownloadUrl(m),
+      ]),
+    ]
+    downloadTextFile("daftar-media-potret-pernikahan.csv", toCsv(rows))
+  }
+
+  function downloadWishes() {
+    const rows: (string | number)[][] = [
+      ["Nama", "Ucapan", "Tayang di Slideshow", "Waktu"],
+      ...entries.map(e => [
+        e.author,
+        e.message,
+        e.approved ? "Ya" : "Tidak",
+        formatDateTime(e.createdAt),
+      ]),
+    ]
+    downloadTextFile("ucapan-potret-pernikahan.csv", toCsv(rows))
   }
 
   const approvedMedia = media.filter(m => m.approved).length
@@ -318,6 +382,58 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
           Tandai <strong style={{ color: "var(--color-ink-700)" }}>Tayang</strong> agar item muncul di slideshow layar besar.
           Item yang tidak ditandai tetap ada di galeri, tetapi tidak ikut tampil.
         </p>
+
+        {/* Export toolbar */}
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: 8,
+            marginBottom: 16,
+            paddingBottom: 16,
+            borderBottom: "1px solid var(--color-ink-100)",
+          }}
+        >
+          {tab === "media" ? (
+            <>
+              <Button
+                variant="secondary"
+                size="small"
+                disabled={media.length === 0 || bulk !== null}
+                onClick={downloadAllMedia}
+              >
+                Unduh Semua Media ({media.length})
+              </Button>
+              <Button
+                variant="ghost"
+                size="small"
+                disabled={media.length === 0}
+                onClick={downloadMediaList}
+              >
+                Daftar Media (CSV)
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant="secondary"
+              size="small"
+              disabled={entries.length === 0}
+              onClick={downloadWishes}
+            >
+              Unduh Ucapan (CSV, {entries.length})
+            </Button>
+          )}
+
+          {bulk && (
+            <span
+              role="status"
+              style={{ fontSize: "var(--text-caption-size)", color: "var(--color-ink-500)" }}
+            >
+              Mengunduh {bulk.done} dari {bulk.total}…
+            </span>
+          )}
+        </div>
 
         {error && (
           <div
@@ -534,6 +650,29 @@ function MediaCard({
           >
             {item.approved ? "Sembunyikan" : "Tayangkan"}
           </Button>
+          <a
+            href={mediaDownloadUrl(item)}
+            download
+            aria-label="Unduh berkas ini"
+            title="Unduh"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              minWidth: 40,
+              height: 40,
+              borderRadius: "var(--radius-md)",
+              border: "1.5px solid var(--color-ink-300)",
+              color: "var(--color-ink-700)",
+              flexShrink: 0,
+            }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+          </a>
           <Button variant="danger" size="small" disabled={busy} onClick={onDelete}>
             Hapus
           </Button>

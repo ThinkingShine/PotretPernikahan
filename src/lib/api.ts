@@ -236,3 +236,55 @@ export async function adminDeleteGuestbookEntry(id: string): Promise<void> {
   const res = await adminRequest(`/admin/guestbook/${id}`, { method: "DELETE" })
   if (!res.ok) throw new Error(await errorMessage(res, "Gagal menghapus ucapan."))
 }
+
+/* ── Downloads ─────────────────────────────────────── */
+
+/**
+ * Supabase serves public objects with Content-Disposition: attachment when
+ * `download` is present. The HTML download attribute cannot do this on its
+ * own because storage sits on a different origin.
+ */
+export function mediaDownloadUrl(item: MediaItem): string {
+  const base = item.url.split("?")[0]
+  const ext = base.includes(".") ? base.split(".").pop() : item.isVideo ? "mp4" : "jpg"
+  const who = item.uploader
+    ? item.uploader.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").toLowerCase()
+    : "tamu"
+  const filename = `potret-${who}-${item.id.slice(0, 8)}.${ext}`
+  const sep = item.url.includes("?") ? "&" : "?"
+  return `${item.url}${sep}download=${encodeURIComponent(filename)}`
+}
+
+/** Quotes a CSV cell so commas, quotes and newlines survive a spreadsheet. */
+function csvCell(value: unknown): string {
+  const text = value === null || value === undefined ? "" : String(value)
+  return `"${text.replace(/"/g, '""')}"`
+}
+
+export function toCsv(rows: (string | number | null | undefined)[][]): string {
+  // The BOM makes Excel read UTF-8 correctly for Indonesian text.
+  return "﻿" + rows.map(r => r.map(csvCell).join(",")).join("\r\n")
+}
+
+export function downloadTextFile(filename: string, content: string, mime = "text/csv") {
+  const blob = new Blob([content], { type: `${mime};charset=utf-8` })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  // Give the browser a moment to start the download before revoking.
+  setTimeout(() => URL.revokeObjectURL(url), 2000)
+}
+
+export function formatDateTime(createdAt: number): string {
+  return new Date(createdAt).toLocaleString("id-ID", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+}
