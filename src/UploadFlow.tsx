@@ -9,7 +9,7 @@ type Step = "pick" | "review" | "done"
 type FileStatus = "queued" | "uploading" | "done" | "error" | "rejected"
 
 const MAX_PHOTO_BYTES = 25 * 1024 * 1024
-const MAX_VIDEO_BYTES = 200 * 1024 * 1024
+const MAX_VIDEO_BYTES = 500 * 1024 * 1024
 
 interface UploadFile {
   id: string

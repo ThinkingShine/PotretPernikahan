@@ -5,6 +5,7 @@ const BASE = `https://${projectId}.supabase.co/functions/v1/make-server-746e6e59
 export interface MediaItem {
   id: string
   url: string
+  objectName?: string
   uploader: string | null
   isVideo: boolean
   approved?: boolean
@@ -98,46 +99,56 @@ export async function createGuestbookEntry(
 }
 
 /**
- * Uploads one file. Uses XMLHttpRequest rather than fetch because only XHR
- * reports upload progress, which the review screen shows per file.
+ * Uploads one file straight to Google Cloud Storage.
+ *
+ * The bytes never touch Supabase: the server only hands back a resumable
+ * session URI, the browser PUTs to it, and the server then confirms the
+ * object exists before the item becomes visible. XMLHttpRequest rather than
+ * fetch because only XHR reports upload progress.
  */
-export function uploadMedia(
+export async function uploadMedia(
   file: File,
   uploader: string,
   onProgress?: (percent: number) => void,
 ): Promise<MediaItem> {
-  return new Promise((resolve, reject) => {
-    const form = new FormData()
-    form.append("file", file)
-    if (uploader.trim()) form.append("uploader", uploader.trim())
+  const startRes = await request("/media/upload-url", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      filename: file.name,
+      contentType: file.type || "application/octet-stream",
+      sizeBytes: file.size,
+      uploader: uploader.trim(),
+    }),
+  })
+  if (!startRes.ok) {
+    throw new Error(await errorMessage(startRes, "Gagal menyiapkan unggahan."))
+  }
+  const { id, uploadUrl } = await startRes.json()
 
+  await new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest()
-    xhr.open("POST", `${BASE}/media`)
-    xhr.setRequestHeader("Authorization", `Bearer ${publicAnonKey}`)
+    xhr.open("PUT", uploadUrl)
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream")
 
     xhr.upload.onprogress = e => {
       if (e.lengthComputable && onProgress) {
         onProgress(Math.round((e.loaded / e.total) * 100))
       }
     }
-
     xhr.onload = () => {
-      let body: any = null
-      try {
-        body = JSON.parse(xhr.responseText)
-      } catch {
-        // Leave body null and fall through to the status check.
-      }
-      if (xhr.status >= 200 && xhr.status < 300 && body?.item) {
-        resolve(body.item)
-      } else {
-        reject(new Error(body?.error ?? "Gagal mengunggah berkas."))
-      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve()
+      else reject(new Error("Gagal mengunggah ke penyimpanan."))
     }
-
     xhr.onerror = () => reject(new Error("Koneksi terputus saat mengunggah."))
-    xhr.send(form)
+    xhr.send(file)
   })
+
+  const doneRes = await request(`/media/${id}/complete`, { method: "POST" })
+  if (!doneRes.ok) {
+    throw new Error(await errorMessage(doneRes, "Gagal menyelesaikan unggahan."))
+  }
+  return (await doneRes.json()).item
 }
 
 /** Formats a timestamp as a short relative label in Indonesian. */
@@ -258,14 +269,7 @@ export async function adminDeleteGuestbookEntry(id: string): Promise<void> {
  * own because storage sits on a different origin.
  */
 export function mediaDownloadUrl(item: MediaItem): string {
-  const base = item.url.split("?")[0]
-  const ext = base.includes(".") ? base.split(".").pop() : item.isVideo ? "mp4" : "jpg"
-  const who = item.uploader
-    ? item.uploader.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").toLowerCase()
-    : "tamu"
-  const filename = `potret-${who}-${item.id.slice(0, 8)}.${ext}`
-  const sep = item.url.includes("?") ? "&" : "?"
-  return `${item.url}${sep}download=${encodeURIComponent(filename)}`
+  return `${BASE}/media/${item.id}/download`
 }
 
 /** Quotes a CSV cell so commas, quotes and newlines survive a spreadsheet. */
