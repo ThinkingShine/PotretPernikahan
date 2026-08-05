@@ -183,6 +183,30 @@ export async function createResumableUpload(
   return location;
 }
 
+/**
+ * Uploads a byte payload straight through a resumable session in one shot.
+ * Used for small server-relayed uploads (cover photos, legacy backfill) where
+ * the bytes are already in memory and a multi-request resumable flow buys
+ * nothing.
+ */
+export async function putObject(
+  objectName: string,
+  contentType: string,
+  bytes: BodyInit,
+  downloadFilename: string,
+): Promise<void> {
+  const uploadUrl = await createResumableUpload(objectName, contentType, downloadFilename);
+  const res = await fetch(uploadUrl, {
+    method: "PUT",
+    headers: { "Content-Type": contentType },
+    body: bytes,
+  });
+  if (!res.ok) {
+    console.log("GCS object upload failed:", res.status, await res.text().catch(() => ""));
+    throw new Error("Gagal mengunggah berkas ke Google Cloud Storage.");
+  }
+}
+
 /** Reads an object's metadata; null when it does not exist. */
 export async function statObject(
   objectName: string,

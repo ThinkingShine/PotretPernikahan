@@ -1,12 +1,14 @@
 import { Hono } from "npm:hono";
 import { cors } from "npm:hono/cors";
 import { logger } from "npm:hono/logger";
+import { createClient } from "jsr:@supabase/supabase-js@2.49.8";
 import * as kv from "./kv_store.tsx";
 import {
   createResumableUpload,
   deleteObject,
   gcsConfigured,
   publicUrl,
+  putObject,
   signedDownloadUrl,
   statObject,
 } from "./gcs.tsx";
@@ -38,7 +40,101 @@ const DEFAULT_EVENT = {
 
 async function readEvent() {
   const stored = await kv.get("config:event");
-  return { ...DEFAULT_EVENT, ...(stored ?? {}) };
+  const event = { ...DEFAULT_EVENT, ...(stored ?? {}) };
+  return migrateLegacyCover(event);
+}
+
+/* ── Legacy Supabase Storage backfill ─────────────────
+ *
+ * Guests who uploaded before the GCS migration have media sitting in the old
+ * `wedding-media` Supabase Storage bucket; their kv records carry a `path`
+ * instead of an `objectName`. Rather than a one-off migration script, each
+ * such record is copied over to GCS and rewritten the next time it is read,
+ * so the backfill happens automatically off real traffic and is safe to run
+ * more than once (an item with `objectName` is already migrated and is
+ * skipped).
+ */
+
+const LEGACY_BUCKET = "wedding-media";
+
+function legacyStorageClient() {
+  return createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  );
+}
+
+async function migrateLegacyMedia(item: any): Promise<any> {
+  if (!item || item.objectName || !item.path || !gcsConfigured()) return item;
+
+  try {
+    const { data, error } = await legacyStorageClient()
+      .storage.from(LEGACY_BUCKET)
+      .download(item.path);
+    if (error || !data) {
+      console.log("Legacy media download failed:", item.path, error);
+      return item;
+    }
+
+    const ext = item.path.includes(".") ? item.path.split(".").pop() : "bin";
+    const objectName = `media/${item.path}`;
+    const downloadName = `potret-${(item.uploader ?? "tamu")
+      .replace(/[^a-zA-Z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .toLowerCase()}-${String(item.id).slice(0, 8)}.${ext}`;
+    const contentType = data.type || (item.isVideo ? "video/mp4" : "image/jpeg");
+
+    await putObject(objectName, contentType, await data.arrayBuffer(), downloadName);
+    await legacyStorageClient().storage.from(LEGACY_BUCKET).remove([item.path]);
+
+    const { path: _path, ...rest } = item;
+    const updated = { ...rest, objectName, downloadName, url: publicUrl(objectName) };
+    await kv.set(`media:${item.id}`, updated);
+    return updated;
+  } catch (err) {
+    console.log("Legacy media migration failed:", item.path, err);
+    return item;
+  }
+}
+
+async function migrateLegacyCover(event: any): Promise<any> {
+  if (!event || event.coverObject || !event.coverPath || !gcsConfigured()) return event;
+
+  try {
+    const { data, error } = await legacyStorageClient()
+      .storage.from(LEGACY_BUCKET)
+      .download(event.coverPath);
+    if (error || !data) {
+      console.log("Legacy cover download failed:", event.coverPath, error);
+      return event;
+    }
+
+    // Already namespaced ("cover/<uuid>.<ext>") under the old bucket, so it
+    // doubles as the new GCS object name.
+    const objectName = event.coverPath;
+    const ext = objectName.includes(".") ? objectName.split(".").pop() : "jpg";
+    const contentType = data.type || "image/jpeg";
+
+    await putObject(objectName, contentType, await data.arrayBuffer(), `sampul.${ext}`);
+    await legacyStorageClient().storage.from(LEGACY_BUCKET).remove([event.coverPath]);
+
+    const updated = {
+      ...event,
+      coverUrl: publicUrl(objectName),
+      coverObject: objectName,
+      coverPath: null,
+    };
+    await kv.set("config:event", updated);
+    return updated;
+  } catch (err) {
+    console.log("Legacy cover migration failed:", event.coverPath, err);
+    return event;
+  }
+}
+
+async function readAllMedia(): Promise<any[]> {
+  const all = await kv.getByPrefix("media:");
+  return Promise.all(all.map(migrateLegacyMedia));
 }
 
 // Enable logger
@@ -117,7 +213,7 @@ app.post(`${BASE}/admin-login`, async (c) => {
 app.get(`${BASE}/media`, async (c) => {
   try {
     const [all, event] = await Promise.all([
-      kv.getByPrefix("media:"),
+      readAllMedia(),
       readEvent(),
     ]);
     const ready = all.filter((m) => m && !m.pending);
@@ -239,7 +335,7 @@ app.get(`${BASE}/media/:id/download`, async (c) => {
 
   try {
     const id = c.req.param("id");
-    const item = await kv.get(`media:${id}`);
+    const item = await migrateLegacyMedia(await kv.get(`media:${id}`));
     if (!item?.objectName) return c.json({ error: "Media tidak ditemukan." }, 404);
     const url = await signedDownloadUrl(item.objectName, item.downloadName ?? `${id}.bin`);
     return c.redirect(url, 302);
@@ -297,7 +393,7 @@ app.post(`${BASE}/guestbook`, async (c) => {
 app.get(`${BASE}/slideshow`, async (c) => {
   try {
     const [media, entries, event] = await Promise.all([
-      kv.getByPrefix("media:"),
+      readAllMedia(),
       kv.getByPrefix("guestbook:"),
       readEvent(),
     ]);
@@ -327,7 +423,7 @@ app.get(`${BASE}/slideshow`, async (c) => {
 
 app.get(`${BASE}/admin/media`, async (c) => {
   try {
-    const all = await kv.getByPrefix("media:");
+    const all = await readAllMedia();
     const items = all.filter((m) => m && !m.pending);
     items.sort((a, b) => (b?.createdAt ?? 0) - (a?.createdAt ?? 0));
     return c.json({ items });
@@ -358,7 +454,7 @@ app.post(`${BASE}/admin/media/:id/approval`, async (c) => {
 app.delete(`${BASE}/admin/media/:id`, async (c) => {
   try {
     const id = c.req.param("id");
-    const item = await kv.get(`media:${id}`);
+    const item = await migrateLegacyMedia(await kv.get(`media:${id}`));
     if (!item) return c.json({ error: "Media tidak ditemukan." }, 404);
 
     if (item.objectName) await deleteObject(item.objectName);
@@ -498,14 +594,10 @@ app.post(`${BASE}/admin/event/cover`, async (c) => {
 
     // Small enough (10 MB cap) to relay through the function, which avoids a
     // second direct-upload flow for a once-in-a-while admin action.
-    const uploadUrl = await createResumableUpload(objectName, file.type, `sampul.${ext}`);
-    const put = await fetch(uploadUrl, {
-      method: "PUT",
-      headers: { "Content-Type": file.type },
-      body: await file.arrayBuffer(),
-    });
-    if (!put.ok) {
-      console.log("Cover upload to GCS failed:", put.status, await put.text().catch(() => ""));
+    try {
+      await putObject(objectName, file.type, await file.arrayBuffer(), `sampul.${ext}`);
+    } catch (err) {
+      console.log("Cover upload to GCS failed:", err);
       return c.json({ error: "Gagal mengunggah foto sampul." }, 500);
     }
 
@@ -562,7 +654,7 @@ app.post(`${BASE}/admin/media/bulk-delete`, async (c) => {
     if (ids.length === 0) return c.json({ error: "Tidak ada item dipilih." }, 400);
 
     for (const id of ids) {
-      const item = await kv.get(`media:${id}`);
+      const item = await migrateLegacyMedia(await kv.get(`media:${id}`));
       if (!item) continue;
       if (item.objectName) await deleteObject(item.objectName);
       await kv.del(`media:${id}`);
