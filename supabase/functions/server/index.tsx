@@ -137,6 +137,25 @@ async function readAllMedia(): Promise<any[]> {
   return Promise.all(all.map(migrateLegacyMedia));
 }
 
+/**
+ * Drops the stored bytes for an item, whichever backend still holds them.
+ * An item that has not been migrated yet — because GCS was unconfigured, or
+ * the copy failed — still lives in Supabase Storage, and deleting only the kv
+ * record would strand the file where nothing references it.
+ */
+async function removeStoredObject(item: any): Promise<void> {
+  if (item?.objectName) {
+    await deleteObject(item.objectName);
+    return;
+  }
+  if (item?.path) {
+    const { error } = await legacyStorageClient()
+      .storage.from(LEGACY_BUCKET)
+      .remove([item.path]);
+    if (error) console.log("Legacy media delete failed:", item.path, error);
+  }
+}
+
 // Enable logger
 app.use('*', logger(console.log));
 
@@ -457,7 +476,7 @@ app.delete(`${BASE}/admin/media/:id`, async (c) => {
     const item = await migrateLegacyMedia(await kv.get(`media:${id}`));
     if (!item) return c.json({ error: "Media tidak ditemukan." }, 404);
 
-    if (item.objectName) await deleteObject(item.objectName);
+    await removeStoredObject(item);
     await kv.del(`media:${id}`);
     return c.json({ ok: true });
   } catch (err) {
@@ -656,7 +675,7 @@ app.post(`${BASE}/admin/media/bulk-delete`, async (c) => {
     for (const id of ids) {
       const item = await migrateLegacyMedia(await kv.get(`media:${id}`));
       if (!item) continue;
-      if (item.objectName) await deleteObject(item.objectName);
+      await removeStoredObject(item);
       await kv.del(`media:${id}`);
     }
     return c.json({ deleted: ids.length });
