@@ -233,7 +233,7 @@ function guardGcs(c: any) {
   return c.json(
     {
       error:
-        "Penyimpanan Google Cloud belum dikonfigurasi. Atur GCS_BUCKET dan GCS_SERVICE_ACCOUNT_JSON pada Edge Function Secrets.",
+        "Penyimpanan Google Cloud belum dikonfigurasi. Atur GCS_BUCKET, GCS_ACCESS_KEY dan GCS_SECRET pada Edge Function Secrets.",
     },
     503,
   );
