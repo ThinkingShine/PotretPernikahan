@@ -21,6 +21,9 @@ export default function App() {
   const [route, setRoute] = useState<Route>(routeFromHash)
   const [view, setView] = useState<GuestView>("landing")
   const [event, setEvent] = useState<EventSettings>(FALLBACK_EVENT)
+  // Starts true so the landing screen can skeleton the couple's name instead
+  // of showing the FALLBACK_EVENT placeholder while the real settings load.
+  const [eventLoading, setEventLoading] = useState(true)
 
   useEffect(() => {
     const onHashChange = () => setRoute(routeFromHash())
@@ -39,6 +42,9 @@ export default function App() {
       .catch(() => {
         // Keep the fallback headings rather than blanking the page.
       })
+      .finally(() => {
+        if (!cancelled) setEventLoading(false)
+      })
     return () => {
       cancelled = true
     }
@@ -50,5 +56,5 @@ export default function App() {
   if (view === "upload") return <UploadFlow event={event} onNavigate={setView} />
   if (view === "gallery") return <GalleryScreen event={event} onNavigate={setView} />
   if (view === "guestbook") return <GuestbookScreen event={event} onNavigate={setView} />
-  return <GuestLanding event={event} onNavigate={setView} />
+  return <GuestLanding event={event} eventLoading={eventLoading} onNavigate={setView} />
 }

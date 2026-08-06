@@ -15,9 +15,11 @@ type NavItem = "upload" | "gallery" | "guestbook"
 
 export default function GuestLanding({
   event,
+  eventLoading = false,
   onNavigate,
 }: {
   event: EventSettings
+  eventLoading?: boolean
   onNavigate?: (view: "upload" | "gallery" | "guestbook") => void
 }) {
   const [activeNav, setActiveNav] = useState<NavItem>("upload")
@@ -106,30 +108,41 @@ export default function GuestLanding({
             padding: "20px var(--space-screen-edge) 20px",
           }}
         >
-          <h1
-            style={{
-              fontFamily: "var(--font-display)",
-              fontSize: "var(--text-display-size)",
-              lineHeight: "var(--text-display-lh)",
-              fontWeight: "var(--text-display-w)",
-              color: "#ffffff",
-              margin: 0,
-              letterSpacing: "-0.01em",
-            }}
-          >
-            {event.coupleNames}
-          </h1>
-          <p
-            style={{
-              fontSize: "var(--text-caption-size)",
-              lineHeight: "var(--text-caption-lh)",
-              color: "rgba(255,255,255,0.8)",
-              margin: "4px 0 0",
-            }}
-          >
-            {event.eventDate}
-            {event.eventLocation ? ` · ${event.eventLocation}` : ""}
-          </p>
+          {eventLoading ? (
+            <>
+              <Skeleton height={40} width="70%" radius="var(--radius-sm)" />
+              <div style={{ marginTop: 8 }}>
+                <Skeleton height={16} width="45%" radius="var(--radius-sm)" />
+              </div>
+            </>
+          ) : (
+            <>
+              <h1
+                style={{
+                  fontFamily: "var(--font-display)",
+                  fontSize: "var(--text-display-size)",
+                  lineHeight: "var(--text-display-lh)",
+                  fontWeight: "var(--text-display-w)",
+                  color: "#ffffff",
+                  margin: 0,
+                  letterSpacing: "-0.01em",
+                }}
+              >
+                {event.coupleNames}
+              </h1>
+              <p
+                style={{
+                  fontSize: "var(--text-caption-size)",
+                  lineHeight: "var(--text-caption-lh)",
+                  color: "rgba(255,255,255,0.8)",
+                  margin: "4px 0 0",
+                }}
+              >
+                {event.eventDate}
+                {event.eventLocation ? ` · ${event.eventLocation}` : ""}
+              </p>
+            </>
+          )}
         </div>
       </div>
 
