@@ -7,9 +7,14 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview",
-    "format": "oxfmt"
+    "format": "oxfmt",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.server.json",
+    "migrate:blob": "node --env-file-if-exists=.env scripts/migrate-storage-to-vercel-blob.mjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.112.1",
+    "@vercel/blob": "^2.7.0",
+    "hono": "^4.13.0",
     "qrcode": "^1.5.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

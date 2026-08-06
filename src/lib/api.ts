@@ -1,11 +1,20 @@
-import { projectId, publicAnonKey } from "../../utils/supabase/info"
+import { put } from "@vercel/blob/client"
 
-const BASE = `https://${projectId}.supabase.co/functions/v1/make-server-746e6e59`
+/**
+ * The API runs as a Vercel Function on the same origin as this app, so a
+ * relative base needs no configuration. VITE_API_BASE_URL overrides it for the
+ * cases where the two are split, e.g. a Figma Make preview build pointing at
+ * the deployed Vercel API.
+ */
+const BASE = (import.meta.env.VITE_API_BASE_URL ?? "/api").replace(/\/+$/, "")
 
 export interface MediaItem {
   id: string
   url: string
-  objectName?: string
+  /** Location inside the Vercel Blob store. */
+  blobPathname?: string
+  /** Serves the same bytes as `url` but as an attachment. */
+  downloadUrl?: string
   uploader: string | null
   isVideo: boolean
   approved?: boolean
@@ -58,13 +67,7 @@ async function errorMessage(res: Response, fallback: string): Promise<string> {
  */
 async function request(path: string, init?: RequestInit): Promise<Response> {
   try {
-    return await fetch(`${BASE}${path}`, {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${publicAnonKey}`,
-        ...(init?.headers ?? {}),
-      },
-    })
+    return await fetch(`${BASE}${path}`, init)
   } catch {
     throw new Error("Koneksi terputus. Periksa jaringan Anda lalu coba lagi.")
   }
@@ -93,18 +96,25 @@ export async function createGuestbookEntry(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ author, message }),
   })
-  if (!res.ok) throw new Error(await errorMessage(res, "Gagal mengirim ucapan."))
+  if (!res.ok)
+    throw new Error(await errorMessage(res, "Gagal mengirim ucapan."))
   const body = await res.json()
   return body.entry
 }
 
 /**
- * Uploads one file straight to Google Cloud Storage.
+ * Anything above this goes up in parallel chunks, which survive a dropped
+ * connection by retrying only the failed part. Venue wifi makes that worth the
+ * extra requests for videos, but not for a single small photo.
+ */
+const MULTIPART_THRESHOLD_BYTES = 8 * 1024 * 1024
+
+/**
+ * Uploads one file straight to Vercel Blob.
  *
- * The bytes never touch Supabase: the server only hands back a resumable
- * session URI, the browser PUTs to it, and the server then confirms the
- * object exists before the item becomes visible. XMLHttpRequest rather than
- * fetch because only XHR reports upload progress.
+ * The bytes never touch the API function: it only mints a client token scoped
+ * to one pathname, media type and size, the browser uploads with it, and the
+ * server then confirms the blob exists before the item becomes visible.
  */
 export async function uploadMedia(
   file: File,
@@ -124,29 +134,28 @@ export async function uploadMedia(
   if (!startRes.ok) {
     throw new Error(await errorMessage(startRes, "Gagal menyiapkan unggahan."))
   }
-  const { id, uploadUrl } = await startRes.json()
+  const { id, pathname, clientToken, contentType } = await startRes.json()
 
-  await new Promise<void>((resolve, reject) => {
-    const xhr = new XMLHttpRequest()
-    xhr.open("PUT", uploadUrl)
-    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream")
-
-    xhr.upload.onprogress = e => {
-      if (e.lengthComputable && onProgress) {
-        onProgress(Math.round((e.loaded / e.total) * 100))
-      }
-    }
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve()
-      else reject(new Error("Gagal mengunggah ke penyimpanan."))
-    }
-    xhr.onerror = () => reject(new Error("Koneksi terputus saat mengunggah."))
-    xhr.send(file)
-  })
+  try {
+    await put(pathname, file, {
+      access: "public",
+      token: clientToken,
+      contentType,
+      multipart: file.size > MULTIPART_THRESHOLD_BYTES,
+      onUploadProgress: ({ percentage }) =>
+        onProgress?.(Math.round(percentage)),
+    })
+  } catch {
+    throw new Error(
+      "Gagal mengunggah ke penyimpanan. Periksa jaringan Anda lalu coba lagi.",
+    )
+  }
 
   const doneRes = await request(`/media/${id}/complete`, { method: "POST" })
   if (!doneRes.ok) {
-    throw new Error(await errorMessage(doneRes, "Gagal menyelesaikan unggahan."))
+    throw new Error(
+      await errorMessage(doneRes, "Gagal menyelesaikan unggahan."),
+    )
   }
   return (await doneRes.json()).item
 }
@@ -176,7 +185,8 @@ export async function fetchSlideshow(): Promise<{
   settings: SlideshowSettings
 }> {
   const res = await request("/slideshow")
-  if (!res.ok) throw new Error(await errorMessage(res, "Gagal memuat slideshow."))
+  if (!res.ok)
+    throw new Error(await errorMessage(res, "Gagal memuat slideshow."))
   const body = await res.json()
   return {
     items: body.items ?? [],
@@ -191,7 +201,10 @@ export async function fetchSlideshow(): Promise<{
 /* ── Admin ─────────────────────────────────────────── */
 
 /** Adds the stored passcode header to an admin request. */
-async function adminRequest(path: string, init?: RequestInit): Promise<Response> {
+async function adminRequest(
+  path: string,
+  init?: RequestInit,
+): Promise<Response> {
   const passcode = getAdminPasscode() ?? ""
   return request(path, {
     ...init,
@@ -205,7 +218,8 @@ export async function adminLogin(passcode: string): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ passcode }),
   })
-  if (!res.ok) throw new Error(await errorMessage(res, "Kode admin tidak sesuai."))
+  if (!res.ok)
+    throw new Error(await errorMessage(res, "Kode admin tidak sesuai."))
   setAdminPasscode(passcode)
 }
 
@@ -232,7 +246,8 @@ export async function adminSetMediaApproval(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ approved }),
   })
-  if (!res.ok) throw new Error(await errorMessage(res, "Gagal memperbarui status."))
+  if (!res.ok)
+    throw new Error(await errorMessage(res, "Gagal memperbarui status."))
   const body = await res.json()
   return body.item
 }
@@ -246,27 +261,31 @@ export async function adminSetGuestbookApproval(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ approved }),
   })
-  if (!res.ok) throw new Error(await errorMessage(res, "Gagal memperbarui status."))
+  if (!res.ok)
+    throw new Error(await errorMessage(res, "Gagal memperbarui status."))
   const body = await res.json()
   return body.entry
 }
 
 export async function adminDeleteMedia(id: string): Promise<void> {
   const res = await adminRequest(`/admin/media/${id}`, { method: "DELETE" })
-  if (!res.ok) throw new Error(await errorMessage(res, "Gagal menghapus media."))
+  if (!res.ok)
+    throw new Error(await errorMessage(res, "Gagal menghapus media."))
 }
 
 export async function adminDeleteGuestbookEntry(id: string): Promise<void> {
   const res = await adminRequest(`/admin/guestbook/${id}`, { method: "DELETE" })
-  if (!res.ok) throw new Error(await errorMessage(res, "Gagal menghapus ucapan."))
+  if (!res.ok)
+    throw new Error(await errorMessage(res, "Gagal menghapus ucapan."))
 }
 
 /* ── Downloads ─────────────────────────────────────── */
 
 /**
- * Supabase serves public objects with Content-Disposition: attachment when
- * `download` is present. The HTML download attribute cannot do this on its
- * own because storage sits on a different origin.
+ * Redirects to the blob's download URL, which carries
+ * Content-Disposition: attachment. Routed through the API rather than linking
+ * the blob directly so items uploaded before the Vercel Blob migration still
+ * resolve, and so a moved blob only has to be fixed in one place.
  */
 export function mediaDownloadUrl(item: MediaItem): string {
   return `${BASE}/media/${item.id}/download`
@@ -280,10 +299,14 @@ function csvCell(value: unknown): string {
 
 export function toCsv(rows: (string | number | null | undefined)[][]): string {
   // The BOM makes Excel read UTF-8 correctly for Indonesian text.
-  return "﻿" + rows.map(r => r.map(csvCell).join(",")).join("\r\n")
+  return "﻿" + rows.map((r) => r.map(csvCell).join(",")).join("\r\n")
 }
 
-export function downloadTextFile(filename: string, content: string, mime = "text/csv") {
+export function downloadTextFile(
+  filename: string,
+  content: string,
+  mime = "text/csv",
+) {
   const blob = new Blob([content], { type: `${mime};charset=utf-8` })
   const url = URL.createObjectURL(blob)
   const a = document.createElement("a")
@@ -313,7 +336,8 @@ export interface EventSettings {
   eventDate: string
   eventLocation: string
   coverUrl: string
-  coverPath: string | null
+  /** Location of the cover inside the Vercel Blob store. */
+  coverBlobPathname: string | null
   galleryRequiresApproval: boolean
   slideshowDurationMs: number
   slideshowShuffle: boolean
@@ -327,7 +351,7 @@ export const FALLBACK_EVENT: EventSettings = {
   eventLocation: "Bandung",
   coverUrl:
     "https://images.unsplash.com/photo-1650377509454-1bbd8392e122?w=800&h=450&fit=crop&auto=format",
-  coverPath: null,
+  coverBlobPathname: null,
   galleryRequiresApproval: false,
   slideshowDurationMs: 7000,
   slideshowShuffle: false,
@@ -336,13 +360,14 @@ export const FALLBACK_EVENT: EventSettings = {
 
 export async function fetchEventSettings(): Promise<EventSettings> {
   const res = await request("/event")
-  if (!res.ok) throw new Error(await errorMessage(res, "Gagal memuat pengaturan acara."))
+  if (!res.ok)
+    throw new Error(await errorMessage(res, "Gagal memuat pengaturan acara."))
   const body = await res.json()
   return { ...FALLBACK_EVENT, ...(body.event ?? {}) }
 }
 
 export async function adminUpdateEvent(
-  input: Partial<Omit<EventSettings, "coverUrl" | "coverPath">> & {
+  input: Partial<Omit<EventSettings, "coverUrl" | "coverBlobPathname">> & {
     coupleNames: string
   },
 ): Promise<EventSettings> {
@@ -351,17 +376,57 @@ export async function adminUpdateEvent(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   })
-  if (!res.ok) throw new Error(await errorMessage(res, "Gagal menyimpan pengaturan."))
+  if (!res.ok)
+    throw new Error(await errorMessage(res, "Gagal menyimpan pengaturan."))
   const body = await res.json()
   return { ...FALLBACK_EVENT, ...(body.event ?? {}) }
 }
 
+/**
+ * Uploads the cover straight to Vercel Blob too. A Vercel Function caps request
+ * bodies well below the 10 MB an admin may pick, so relaying the file through
+ * the API is not an option.
+ */
 export async function adminUploadCover(file: File): Promise<EventSettings> {
-  const form = new FormData()
-  form.append("file", file)
-  const res = await adminRequest("/admin/event/cover", { method: "POST", body: form })
-  if (!res.ok) throw new Error(await errorMessage(res, "Gagal mengunggah foto sampul."))
-  const body = await res.json()
+  const startRes = await adminRequest("/admin/event/cover/upload-url", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      filename: file.name,
+      contentType: file.type || "application/octet-stream",
+      sizeBytes: file.size,
+    }),
+  })
+  if (!startRes.ok) {
+    throw new Error(
+      await errorMessage(startRes, "Gagal mengunggah foto sampul."),
+    )
+  }
+  const { pathname, clientToken, contentType } = await startRes.json()
+
+  try {
+    await put(pathname, file, {
+      access: "public",
+      token: clientToken,
+      contentType,
+    })
+  } catch {
+    throw new Error(
+      "Gagal mengunggah foto sampul. Periksa jaringan Anda lalu coba lagi.",
+    )
+  }
+
+  const doneRes = await adminRequest("/admin/event/cover/complete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pathname }),
+  })
+  if (!doneRes.ok) {
+    throw new Error(
+      await errorMessage(doneRes, "Gagal mengunggah foto sampul."),
+    )
+  }
+  const body = await doneRes.json()
   return { ...FALLBACK_EVENT, ...(body.event ?? {}) }
 }
 
@@ -373,7 +438,8 @@ async function bulkAction(path: string, body: object): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   })
-  if (!res.ok) throw new Error(await errorMessage(res, "Gagal memproses pilihan."))
+  if (!res.ok)
+    throw new Error(await errorMessage(res, "Gagal memproses pilihan."))
 }
 
 export function adminBulkMediaApproval(ids: string[], approved: boolean) {
@@ -402,6 +468,7 @@ export async function adminChangePasscode(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ currentPasscode, nextPasscode }),
   })
-  if (!res.ok) throw new Error(await errorMessage(res, "Gagal mengubah kode admin."))
+  if (!res.ok)
+    throw new Error(await errorMessage(res, "Gagal mengubah kode admin."))
   setAdminPasscode(nextPasscode)
 }
