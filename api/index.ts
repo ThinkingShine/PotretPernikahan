@@ -8,6 +8,10 @@
  */
 
 import { handle } from "hono/vercel"
-import app from "../server/app"
+// The .js extension is required, here and throughout server/. Vercel compiles
+// these files to ESM one-to-one without rewriting specifiers, so an
+// extensionless import becomes an unresolvable one at runtime. TypeScript and
+// Vite both map the .js back to the .ts on disk.
+import app from "../server/app.js"
 
 export default handle(app)

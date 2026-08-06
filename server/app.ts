@@ -10,8 +10,8 @@
 import { Hono } from "hono"
 import { cors } from "hono/cors"
 import { logger } from "hono/logger"
-import * as kv from "./kv"
-import { blobConfigured, createUploadToken, deleteBlob, statBlob } from "./blob"
+import * as kv from "./kv.js"
+import { blobConfigured, createUploadToken, deleteBlob, statBlob } from "./blob.js"
 
 const app = new Hono()
 
