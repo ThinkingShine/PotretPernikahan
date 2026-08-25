@@ -40,7 +40,26 @@ const DEFAULT_EVENT = {
 
 async function readEvent() {
   const stored = await kv.get("config:event")
-  return { ...DEFAULT_EVENT, ...(stored ?? {}) }
+  const event = { ...DEFAULT_EVENT, ...(stored ?? {}) }
+  if (event.coverBlobPathname && event.coverUrl && event.coverUrl.includes(".r2.dev")) {
+    event.coverUrl = `${BASE}/event/cover`
+  }
+  return event
+}
+
+// Helper to ensure media items have accessible URLs even if *.r2.dev is blocked by ISP
+function formatMediaItem(item: any) {
+  if (!item) return item
+  const isR2Dev = typeof item.url === "string" && item.url.includes(".r2.dev")
+  const fallbackUrl = `${BASE}/media/${item.id}/file`
+  return {
+    ...item,
+    url: !item.url || isR2Dev ? fallbackUrl : item.url,
+    downloadUrl:
+      !item.downloadUrl || isR2Dev
+        ? `${BASE}/media/${item.id}/download`
+        : item.downloadUrl,
+  }
 }
 
 // Enable logger
@@ -142,7 +161,10 @@ app.get(`${BASE}/media`, async (c) => {
     const ready = all.filter((m) => m && !m.pending)
     const items = (
       event.galleryRequiresApproval ? ready.filter((m) => m.approved) : ready
-    ).sort((a, b) => (b?.createdAt ?? 0) - (a?.createdAt ?? 0))
+    )
+      .sort((a, b) => (b?.createdAt ?? 0) - (a?.createdAt ?? 0))
+      .map(formatMediaItem)
+
     return c.json({ items })
   } catch (err) {
     console.log("Failed to list media:", err)
@@ -226,8 +248,6 @@ app.post(`${BASE}/media/upload-url`, async (c) => {
       })
     }
 
-    // Stored as pending so a reserved id that never finishes uploading can
-    // never surface in the gallery.
     await kv.set(`media:${id}`, {
       id,
       blobPathname,
@@ -286,10 +306,90 @@ app.post(`${BASE}/media/:id/complete`, async (c) => {
       downloadUrl: stat.downloadUrl,
     }
     await kv.set(`media:${id}`, updated)
-    return c.json({ item: updated }, 201)
+    return c.json({ item: formatMediaItem(updated) }, 201)
   } catch (err) {
     console.log("Failed to complete upload:", err)
     return c.json({ error: "Gagal menyelesaikan unggahan." }, 500)
+  }
+})
+
+/**
+ * Direct streaming endpoint from R2 storage.
+ * Works universally on all networks without requiring custom domain DNS configuration.
+ */
+app.get(`${BASE}/media/:id/file`, async (c) => {
+  try {
+    const id = c.req.param("id")
+    const item = await kv.get(`media:${id}`)
+    if (!item || !item.blobPathname) {
+      return c.text("Media tidak ditemukan", 404)
+    }
+
+    if (r2.r2Configured()) {
+      const obj = await r2.getObject(item.blobPathname)
+      if (!obj) {
+        return c.text("Berkas fisik tidak ditemukan di penyimpanan", 404)
+      }
+
+      c.header("Content-Type", obj.contentType)
+      if (obj.contentLength) {
+        c.header("Content-Length", String(obj.contentLength))
+      }
+      c.header("Cache-Control", "public, max-age=31536000, immutable")
+      if (obj.etag) c.header("ETag", obj.etag)
+
+      const stream = (obj.body as any)?.transformToWebStream
+        ? (obj.body as any).transformToWebStream()
+        : obj.body
+      return c.body(stream)
+    }
+
+    const target = item.downloadUrl ?? item.url
+    if (!target) return c.text("Media tidak ditemukan", 404)
+    return c.redirect(target, 302)
+  } catch (err) {
+    console.log("Failed to stream media file:", err)
+    return c.text("Gagal memuat berkas media.", 500)
+  }
+})
+
+/**
+ * Event cover photo streaming endpoint.
+ */
+app.get(`${BASE}/event/cover`, async (c) => {
+  try {
+    const event = await kv.get("config:event")
+    if (!event?.coverBlobPathname) {
+      return c.redirect(
+        event?.coverUrl ||
+          "https://images.unsplash.com/photo-1650377509454-1bbd8392e122?w=800&h=450&fit=crop&auto=format",
+        302,
+      )
+    }
+
+    if (r2.r2Configured()) {
+      const obj = await r2.getObject(event.coverBlobPathname)
+      if (!obj) {
+        return c.redirect(event.coverUrl, 302)
+      }
+
+      c.header("Content-Type", obj.contentType)
+      if (obj.contentLength) {
+        c.header("Content-Length", String(obj.contentLength))
+      }
+      c.header("Cache-Control", "public, max-age=86400")
+      if (obj.etag) c.header("ETag", obj.etag)
+
+      const stream = (obj.body as any)?.transformToWebStream
+        ? (obj.body as any).transformToWebStream()
+        : obj.body
+      return c.body(stream)
+    }
+
+    return c.redirect(event.coverUrl, 302)
+  } catch (err) {
+    console.log("Failed to stream cover:", err)
+    return c.text("Gagal memuat foto sampul.", 500)
   }
 })
 
@@ -374,6 +474,8 @@ app.get(`${BASE}/slideshow`, async (c) => {
     const items = media
       .filter((m) => m?.approved && !m.pending)
       .sort((a, b) => (b?.createdAt ?? 0) - (a?.createdAt ?? 0))
+      .map(formatMediaItem)
+
     const wishes = event.slideshowShowWishes
       ? entries
           .filter((e) => e?.approved)
@@ -398,8 +500,11 @@ app.get(`${BASE}/slideshow`, async (c) => {
 app.get(`${BASE}/admin/media`, async (c) => {
   try {
     const all = await kv.getByPrefix("media:")
-    const items = all.filter((m) => m && !m.pending)
-    items.sort((a, b) => (b?.createdAt ?? 0) - (a?.createdAt ?? 0))
+    const items = all
+      .filter((m) => m && !m.pending)
+      .sort((a, b) => (b?.createdAt ?? 0) - (a?.createdAt ?? 0))
+      .map(formatMediaItem)
+
     return c.json({ items })
   } catch (err) {
     console.log("Failed to list media for admin:", err)
@@ -418,7 +523,7 @@ app.post(`${BASE}/admin/media/:id/approval`, async (c) => {
 
     const updated = { ...item, approved }
     await kv.set(`media:${id}`, updated)
-    return c.json({ item: updated })
+    return c.json({ item: formatMediaItem(updated) })
   } catch (err) {
     console.log("Failed to set media approval:", err)
     return c.json({ error: "Gagal memperbarui status." }, 500)

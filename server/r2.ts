@@ -4,6 +4,7 @@
  * Provides:
  * - Presigned PUT URL for direct-to-R2 upload from browser
  * - Object stat (HeadObject) verification
+ * - Object streaming (GetObject)
  * - Object deletion (DeleteObject)
  * - Public URL construction & Presigned Download URL generation
  */
@@ -34,7 +35,7 @@ function getBucketName(): string {
   return bucket
 }
 
-function getS3Client(): S3Client {
+export function getS3Client(): S3Client {
   if (cachedS3) return cachedS3
 
   const accountId = process.env.R2_ACCOUNT_ID
@@ -109,6 +110,42 @@ export async function statObject(pathname: string): Promise<R2ObjectStat | null>
       contentType: response.ContentType ?? "application/octet-stream",
       url,
       downloadUrl: url,
+    }
+  } catch (err: any) {
+    if (
+      err?.$metadata?.httpStatusCode === 404 ||
+      err?.name === "NotFound" ||
+      err?.name === "NoSuchKey"
+    ) {
+      return null
+    }
+    throw err
+  }
+}
+
+/**
+ * Retrieves an object stream from R2.
+ */
+export async function getObject(pathname: string): Promise<{
+  body: any
+  contentType: string
+  contentLength?: number
+  etag?: string
+} | null> {
+  try {
+    const s3 = getS3Client()
+    const response = await s3.send(
+      new GetObjectCommand({
+        Bucket: getBucketName(),
+        Key: pathname,
+      }),
+    )
+
+    return {
+      body: response.Body,
+      contentType: response.ContentType ?? "application/octet-stream",
+      contentLength: response.ContentLength,
+      etag: response.ETag,
     }
   } catch (err: any) {
     if (
