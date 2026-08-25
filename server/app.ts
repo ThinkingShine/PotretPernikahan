@@ -3,14 +3,15 @@
  *
  * Runs as a single Vercel Function (see api/index.ts) and, in development, as
  * Vite middleware (see vite.config.ts) so the preview keeps working without a
- * separate process. Media lives in Vercel Blob; the guestbook, gallery index
- * and settings live in Supabase Postgres via server/kv.ts.
+ * separate process. Media lives in Cloudflare R2 (or Vercel Blob); the guestbook,
+ * gallery index and settings live in Supabase Postgres via server/kv.ts.
  */
 
 import { Hono } from "hono"
 import { cors } from "hono/cors"
 import { logger } from "hono/logger"
 import * as kv from "./kv.js"
+import * as r2 from "./r2.js"
 import { blobConfigured, createUploadToken, deleteBlob, statBlob } from "./blob.js"
 
 const app = new Hono()
@@ -60,8 +61,7 @@ app.use(
 
 /**
  * Anything that escapes a route handler still answers in the shape the client
- * parses. Without this Hono replies with bare "Internal Server Error" text, so
- * a deployment missing SUPABASE_URL would show guests nothing they can act on.
+ * parses.
  */
 app.onError((err, c) => {
   console.log("Unhandled API error:", err)
@@ -106,8 +106,11 @@ app.use(`${BASE}/admin/*`, requireAdmin)
 
 // Health check endpoint
 app.get(`${BASE}/health`, (c) => {
+  const isR2 = r2.r2Configured()
   return c.json({
     status: "ok",
+    storage: isR2 ? "r2" : blobConfigured() ? "blob" : "none",
+    r2: isR2,
     blob: blobConfigured(),
     database: kv.kvConfigured(),
   })
@@ -147,12 +150,12 @@ app.get(`${BASE}/media`, async (c) => {
   }
 })
 
-function guardBlob(c: any) {
-  if (blobConfigured()) return null
+function guardStorage(c: any) {
+  if (r2.r2Configured() || blobConfigured()) return null
   return c.json(
     {
       error:
-        "Penyimpanan Vercel Blob belum dikonfigurasi. Hubungkan Blob store ke project agar BLOB_READ_WRITE_TOKEN tersedia.",
+        "Penyimpanan media belum dikonfigurasi. Atur variabel Cloudflare R2 atau Vercel Blob di .env.",
     },
     503,
   )
@@ -170,14 +173,12 @@ function slugify(value: string): string {
 
 function extensionOf(filename: string, fallback: string): string {
   const ext = filename.includes(".") ? filename.split(".").pop() : ""
-  // Blob pathnames end up in a URL and a Content-Disposition filename, so keep
-  // the extension to plain characters.
   return ext && /^[a-zA-Z0-9]{1,8}$/.test(ext) ? ext.toLowerCase() : fallback
 }
 
-/** Step 1: reserve an id and hand the browser a token it can upload with. */
+/** Step 1: reserve an id and hand the browser a presigned URL or token it can upload with. */
 app.post(`${BASE}/media/upload-url`, async (c) => {
-  const blocked = guardBlob(c)
+  const blocked = guardStorage(c)
   if (blocked) return blocked
 
   try {
@@ -207,15 +208,23 @@ app.post(`${BASE}/media/upload-url`, async (c) => {
     const id = crypto.randomUUID()
     const ext = extensionOf(filename, "bin")
     const downloadName = `potret-${slugify(uploader ?? "tamu")}-${id.slice(0, 8)}.${ext}`
-    // The uuid segment keeps pathnames unique; the last segment becomes the
-    // filename a browser saves when the blob's download URL is used.
     const blobPathname = `media/${id}/${downloadName}`
 
-    const clientToken = await createUploadToken({
-      pathname: blobPathname,
-      contentType,
-      maximumSizeInBytes: limit,
-    })
+    let uploadUrl: string | null = null
+    let clientToken: string | null = null
+
+    if (r2.r2Configured()) {
+      uploadUrl = await r2.createUploadPresignedUrl({
+        pathname: blobPathname,
+        contentType,
+      })
+    } else {
+      clientToken = await createUploadToken({
+        pathname: blobPathname,
+        contentType,
+        maximumSizeInBytes: limit,
+      })
+    }
 
     // Stored as pending so a reserved id that never finishes uploading can
     // never surface in the gallery.
@@ -232,16 +241,23 @@ app.post(`${BASE}/media/upload-url`, async (c) => {
       createdAt: Date.now(),
     })
 
-    return c.json({ id, pathname: blobPathname, clientToken, contentType })
+    return c.json({
+      id,
+      pathname: blobPathname,
+      uploadUrl,
+      clientToken,
+      contentType,
+      method: "PUT",
+    })
   } catch (err) {
-    console.log("Failed to create upload token:", err)
+    console.log("Failed to create upload URL/token:", err)
     return c.json({ error: "Gagal menyiapkan unggahan." }, 500)
   }
 })
 
-/** Step 2: only publish the item once the blob really exists. */
+/** Step 2: only publish the item once the blob really exists in storage. */
 app.post(`${BASE}/media/:id/complete`, async (c) => {
-  const blocked = guardBlob(c)
+  const blocked = guardStorage(c)
   if (blocked) return blocked
 
   try {
@@ -249,7 +265,14 @@ app.post(`${BASE}/media/:id/complete`, async (c) => {
     const item = await kv.get(`media:${id}`)
     if (!item) return c.json({ error: "Unggahan tidak ditemukan." }, 404)
 
-    const stat = await statBlob(item.blobPathname)
+    let stat: { size: number; contentType: string; url: string; downloadUrl: string } | null = null
+
+    if (r2.r2Configured()) {
+      stat = await r2.statObject(item.blobPathname)
+    } else {
+      stat = await statBlob(item.blobPathname)
+    }
+
     if (!stat) {
       await kv.del(`media:${id}`)
       return c.json({ error: "Berkas tidak sampai ke penyimpanan." }, 400)
@@ -271,16 +294,23 @@ app.post(`${BASE}/media/:id/complete`, async (c) => {
 })
 
 /**
- * Redirects to the blob's download URL, which serves the bytes with
- * Content-Disposition: attachment. Kept as a redirect so a plain anchor still
- * works: the HTML download attribute is ignored cross-origin, and older items
- * migrated from another provider may only have a plain URL.
+ * Serves or redirects to the download URL with attachment header.
  */
 app.get(`${BASE}/media/:id/download`, async (c) => {
   try {
     const id = c.req.param("id")
     const item = await kv.get(`media:${id}`)
-    const target = item?.downloadUrl ?? item?.url
+    if (!item) return c.json({ error: "Media tidak ditemukan." }, 404)
+
+    if (r2.r2Configured() && item.blobPathname) {
+      const presigned = await r2.createDownloadPresignedUrl(
+        item.blobPathname,
+        item.downloadName || "potret.jpg",
+      )
+      return c.redirect(presigned, 302)
+    }
+
+    const target = item.downloadUrl ?? item.url
     if (!target) return c.json({ error: "Media tidak ditemukan." }, 404)
     return c.redirect(target, 302)
   } catch (err) {
@@ -401,7 +431,13 @@ app.delete(`${BASE}/admin/media/:id`, async (c) => {
     const item = await kv.get(`media:${id}`)
     if (!item) return c.json({ error: "Media tidak ditemukan." }, 404)
 
-    if (item.blobPathname) await deleteBlob(item.blobPathname)
+    if (item.blobPathname) {
+      if (r2.r2Configured()) {
+        await r2.deleteObject(item.blobPathname)
+      } else {
+        await deleteBlob(item.blobPathname)
+      }
+    }
     await kv.del(`media:${id}`)
     return c.json({ ok: true })
   } catch (err) {
@@ -518,12 +554,10 @@ app.post(`${BASE}/admin/event`, async (c) => {
 })
 
 /**
- * The cover photo uses the same direct-to-Blob flow as guest media rather than
- * being relayed through this function: a Vercel Function request body is capped
- * well below the 10 MB an admin is allowed to pick.
+ * Cover photo upload URL generator.
  */
 app.post(`${BASE}/admin/event/cover/upload-url`, async (c) => {
-  const blocked = guardBlob(c)
+  const blocked = guardStorage(c)
   if (blocked) return blocked
 
   try {
@@ -544,24 +578,39 @@ app.post(`${BASE}/admin/event/cover/upload-url`, async (c) => {
     const ext = extensionOf(filename, "jpg")
     const blobPathname = `cover/${crypto.randomUUID()}/sampul.${ext}`
 
-    const clientToken = await createUploadToken({
-      pathname: blobPathname,
-      contentType,
-      maximumSizeInBytes: MAX_COVER_BYTES,
-    })
+    let uploadUrl: string | null = null
+    let clientToken: string | null = null
 
-    return c.json({ pathname: blobPathname, clientToken, contentType })
+    if (r2.r2Configured()) {
+      uploadUrl = await r2.createUploadPresignedUrl({
+        pathname: blobPathname,
+        contentType,
+      })
+    } else {
+      clientToken = await createUploadToken({
+        pathname: blobPathname,
+        contentType,
+        maximumSizeInBytes: MAX_COVER_BYTES,
+      })
+    }
+
+    return c.json({
+      pathname: blobPathname,
+      uploadUrl,
+      clientToken,
+      contentType,
+      method: "PUT",
+    })
   } catch (err) {
     console.log("Failed to create cover upload token:", err)
     return c.json({ error: "Gagal menyiapkan unggahan foto sampul." }, 500)
   }
 })
 
-/** Matches only pathnames this server mints, so `pathname` can be trusted. */
 const COVER_PATHNAME = /^cover\/[0-9a-f-]{36}\/sampul\.[a-z0-9]{1,8}$/i
 
 app.post(`${BASE}/admin/event/cover/complete`, async (c) => {
-  const blocked = guardBlob(c)
+  const blocked = guardStorage(c)
   if (blocked) return blocked
 
   try {
@@ -571,16 +620,26 @@ app.post(`${BASE}/admin/event/cover/complete`, async (c) => {
       return c.json({ error: "Lokasi berkas tidak sesuai." }, 400)
     }
 
-    const stat = await statBlob(pathname)
+    let stat: { size: number; contentType: string; url: string; downloadUrl: string } | null = null
+    if (r2.r2Configured()) {
+      stat = await r2.statObject(pathname)
+    } else {
+      stat = await statBlob(pathname)
+    }
+
     if (!stat)
       return c.json({ error: "Berkas tidak sampai ke penyimpanan." }, 400)
     if (!stat.contentType.startsWith("image/")) {
-      await deleteBlob(pathname)
+      if (r2.r2Configured()) await r2.deleteObject(pathname)
+      else await deleteBlob(pathname)
       return c.json({ error: "Foto sampul harus berupa gambar." }, 400)
     }
 
     const current = await readEvent()
-    if (current.coverBlobPathname) await deleteBlob(current.coverBlobPathname)
+    if (current.coverBlobPathname) {
+      if (r2.r2Configured()) await r2.deleteObject(current.coverBlobPathname)
+      else await deleteBlob(current.coverBlobPathname)
+    }
 
     const updated = {
       ...current,
@@ -636,7 +695,10 @@ app.post(`${BASE}/admin/media/bulk-delete`, async (c) => {
     for (const id of ids) {
       const item = await kv.get(`media:${id}`)
       if (!item) continue
-      if (item.blobPathname) await deleteBlob(item.blobPathname)
+      if (item.blobPathname) {
+        if (r2.r2Configured()) await r2.deleteObject(item.blobPathname)
+        else await deleteBlob(item.blobPathname)
+      }
       await kv.del(`media:${id}`)
     }
     return c.json({ deleted: ids.length })
@@ -692,8 +754,6 @@ app.post(`${BASE}/admin/passcode`, async (c) => {
     const next =
       typeof body?.nextPasscode === "string" ? body.nextPasscode.trim() : ""
 
-    // Re-check the old code even though the route is already guarded, so a
-    // walk-up to an unlocked dashboard cannot silently change the lock.
     if (!(await isAdmin(current))) {
       return c.json({ error: "Kode admin saat ini tidak sesuai." }, 401)
     }

@@ -104,17 +104,62 @@ export async function createGuestbookEntry(
 
 /**
  * Anything above this goes up in parallel chunks, which survive a dropped
- * connection by retrying only the failed part. Venue wifi makes that worth the
- * extra requests for videos, but not for a single small photo.
+ * connection by retrying only the failed part.
  */
 const MULTIPART_THRESHOLD_BYTES = 8 * 1024 * 1024
 
+async function uploadToStorage(options: {
+  pathname: string
+  uploadUrl?: string | null
+  clientToken?: string | null
+  contentType: string
+  file: File
+  onProgress?: (percent: number) => void
+}): Promise<void> {
+  if (options.uploadUrl) {
+    // Cloudflare R2 / S3 Direct Presigned PUT
+    await new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open("PUT", options.uploadUrl!, true)
+      xhr.setRequestHeader("Content-Type", options.contentType)
+      if (xhr.upload && options.onProgress) {
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            options.onProgress!(Math.round((e.loaded / e.total) * 100))
+          }
+        }
+      }
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve()
+        else reject(new Error(`Gagal mengunggah ke penyimpanan (Status ${xhr.status}).`))
+      }
+      xhr.onerror = () =>
+        reject(
+          new Error("Gagal mengunggah ke penyimpanan. Periksa jaringan Anda lalu coba lagi."),
+        )
+      xhr.send(options.file)
+    })
+  } else if (options.clientToken) {
+    // Vercel Blob fallback
+    await put(options.pathname, options.file, {
+      access: "public",
+      token: options.clientToken,
+      contentType: options.contentType,
+      multipart: options.file.size > MULTIPART_THRESHOLD_BYTES,
+      onUploadProgress: ({ percentage }) =>
+        options.onProgress?.(Math.round(percentage)),
+    })
+  } else {
+    throw new Error("Target penyimpanan tidak valid.")
+  }
+}
+
 /**
- * Uploads one file straight to Vercel Blob.
+ * Uploads one file straight to Cloudflare R2 (or Vercel Blob).
  *
- * The bytes never touch the API function: it only mints a client token scoped
- * to one pathname, media type and size, the browser uploads with it, and the
- * server then confirms the blob exists before the item becomes visible.
+ * The bytes never touch the API function: it only mints a presigned upload URL,
+ * the browser uploads directly, and the server confirms the object exists before
+ * the item becomes visible in the gallery.
  */
 export async function uploadMedia(
   file: File,
@@ -134,20 +179,22 @@ export async function uploadMedia(
   if (!startRes.ok) {
     throw new Error(await errorMessage(startRes, "Gagal menyiapkan unggahan."))
   }
-  const { id, pathname, clientToken, contentType } = await startRes.json()
+  const { id, pathname, uploadUrl, clientToken, contentType } =
+    await startRes.json()
 
   try {
-    await put(pathname, file, {
-      access: "public",
-      token: clientToken,
+    await uploadToStorage({
+      pathname,
+      uploadUrl,
+      clientToken,
       contentType,
-      multipart: file.size > MULTIPART_THRESHOLD_BYTES,
-      onUploadProgress: ({ percentage }) =>
-        onProgress?.(Math.round(percentage)),
+      file,
+      onProgress,
     })
-  } catch {
+  } catch (err: any) {
     throw new Error(
-      "Gagal mengunggah ke penyimpanan. Periksa jaringan Anda lalu coba lagi.",
+      err?.message ||
+        "Gagal mengunggah ke penyimpanan. Periksa jaringan Anda lalu coba lagi.",
     )
   }
 
@@ -402,17 +449,21 @@ export async function adminUploadCover(file: File): Promise<EventSettings> {
       await errorMessage(startRes, "Gagal mengunggah foto sampul."),
     )
   }
-  const { pathname, clientToken, contentType } = await startRes.json()
+  const { pathname, uploadUrl, clientToken, contentType } =
+    await startRes.json()
 
   try {
-    await put(pathname, file, {
-      access: "public",
-      token: clientToken,
+    await uploadToStorage({
+      pathname,
+      uploadUrl,
+      clientToken,
       contentType,
+      file,
     })
-  } catch {
+  } catch (err: any) {
     throw new Error(
-      "Gagal mengunggah foto sampul. Periksa jaringan Anda lalu coba lagi.",
+      err?.message ||
+        "Gagal mengunggah foto sampul. Periksa jaringan Anda lalu coba lagi.",
     )
   }
 
