@@ -194,6 +194,48 @@ function MediaTile({
   onClick: () => void
 }) {
   const [loaded, setLoaded] = useState(false)
+  const [heicBlobUrl, setHeicBlobUrl] = useState<string | null>(null)
+  const isHeic =
+    !item.isVideo &&
+    (item.url.toLowerCase().includes(".heic") ||
+      (item.blobPathname && item.blobPathname.toLowerCase().includes(".heic")) ||
+      (item.downloadName && item.downloadName.toLowerCase().includes(".heic")))
+
+  useEffect(() => {
+    if (!isHeic) return
+    let active = true
+    let blobUrl: string | null = null
+
+    async function decodeHeic() {
+      try {
+        const res = await fetch(item.url)
+        const blob = await res.blob()
+        const heic2anyModule = await import("heic2any")
+        const heic2any = (heic2anyModule as any).default || heic2anyModule
+        const converted = await heic2any({
+          blob,
+          toType: "image/jpeg",
+          quality: 0.85,
+        })
+        const finalBlob = Array.isArray(converted) ? converted[0] : converted
+        blobUrl = URL.createObjectURL(finalBlob)
+        if (active) {
+          setHeicBlobUrl(blobUrl)
+          setLoaded(true)
+        }
+      } catch (err) {
+        console.warn("HEIC render fallback:", err)
+      }
+    }
+
+    decodeHeic()
+    return () => {
+      active = false
+      if (blobUrl) URL.revokeObjectURL(blobUrl)
+    }
+  }, [isHeic, item.url])
+
+  const displaySrc = isHeic ? heicBlobUrl || item.url : item.url
 
   return (
     <div style={{ breakInside: "avoid", marginBottom: 8 }}>
@@ -230,7 +272,7 @@ function MediaTile({
           />
         ) : (
           <img
-            src={item.url}
+            src={displaySrc}
             alt={item.uploader ? `Foto dari ${item.uploader}` : "Foto tamu"}
             loading="lazy"
             decoding="async"
@@ -324,10 +366,53 @@ function Lightbox({
 }) {
   const item = items[index]
   const [imgLoaded, setImgLoaded] = useState(false)
+  const [heicBlobUrl, setHeicBlobUrl] = useState<string | null>(null)
   const touchStartX = useRef<number | null>(null)
 
-  // Reset loaded state on index change
-  useEffect(() => { setImgLoaded(false) }, [index])
+  const isHeic =
+    !item?.isVideo &&
+    item?.url &&
+    (item.url.toLowerCase().includes(".heic") ||
+      (item.blobPathname && item.blobPathname.toLowerCase().includes(".heic")) ||
+      (item.downloadName && item.downloadName.toLowerCase().includes(".heic")))
+
+  // Reset loaded state on index change & decode HEIC if needed
+  useEffect(() => {
+    setImgLoaded(false)
+    setHeicBlobUrl(null)
+    if (!isHeic || !item) return
+
+    let active = true
+    let blobUrl: string | null = null
+
+    async function decodeLightboxHeic() {
+      try {
+        const res = await fetch(item.url)
+        const blob = await res.blob()
+        const heic2anyModule = await import("heic2any")
+        const heic2any = (heic2anyModule as any).default || heic2anyModule
+        const converted = await heic2any({
+          blob,
+          toType: "image/jpeg",
+          quality: 0.9,
+        })
+        const finalBlob = Array.isArray(converted) ? converted[0] : converted
+        blobUrl = URL.createObjectURL(finalBlob)
+        if (active) {
+          setHeicBlobUrl(blobUrl)
+          setImgLoaded(true)
+        }
+      } catch (err) {
+        console.warn("Lightbox HEIC decode failed:", err)
+      }
+    }
+
+    decodeLightboxHeic()
+    return () => {
+      active = false
+      if (blobUrl) URL.revokeObjectURL(blobUrl)
+    }
+  }, [index, isHeic, item])
 
   // Keyboard nav
   useEffect(() => {
@@ -466,7 +551,7 @@ function Lightbox({
             />
           ) : (
             <img
-              src={item.url}
+              src={isHeic ? heicBlobUrl || item.url : item.url}
               alt={item.uploader ? `Foto dari ${item.uploader}` : "Foto tamu"}
               onLoad={() => setImgLoaded(true)}
               style={{
