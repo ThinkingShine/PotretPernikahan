@@ -56,7 +56,7 @@ export default function UploadFlow({
   onNavigate,
 }: {
   event: EventSettings
-  onNavigate?: (view: "upload" | "gallery" | "guestbook") => void
+  onNavigate?: (view: "landing" | "upload" | "gallery" | "guestbook") => void
 }) {
   const [step, setStep] = useState<Step>("pick")
   const [files, setFiles] = useState<UploadFile[]>([])
@@ -147,7 +147,7 @@ export default function UploadFlow({
   }
 
   function goBack() {
-    if (step === "pick") onNavigate?.("gallery")
+    if (step === "pick") onNavigate?.("landing")
     else setStep("pick")
   }
 
@@ -190,7 +190,13 @@ export default function UploadFlow({
     }
     setSending(false)
     setUploadedCount(ok)
-    if (ok > 0) setStep("done")
+    if (ok > 0) {
+      setStep("done")
+      // Automatically redirect to gallery so the user immediately sees the uploaded photos
+      setTimeout(() => {
+        onNavigate?.("gallery")
+      }, 700)
+    }
   }
 
   function resetFlow() {

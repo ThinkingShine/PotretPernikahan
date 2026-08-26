@@ -23,6 +23,7 @@ import {
   type GuestbookEntry,
   type MediaItem,
 } from "./lib/api"
+import { useHeicImage } from "./lib/useHeicImage"
 
 type Tab = "media" | "guestbook" | "event" | "invite" | "security"
 type StatusFilter = "semua" | "tayang" | "belum"
@@ -756,6 +757,8 @@ function MediaCard({
   selected: boolean
   onSelect: () => void
 }) {
+  const displayUrl = useHeicImage(item)
+
   return (
     <div
       style={{
@@ -784,9 +787,10 @@ function MediaCard({
           />
         ) : (
           <img
-            src={item.url}
+            src={displayUrl}
             alt={item.uploader ? `Foto dari ${item.uploader}` : "Foto tamu"}
             loading="lazy"
+            decoding="async"
             style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
           />
         )}

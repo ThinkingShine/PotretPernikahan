@@ -35,7 +35,7 @@ export default function GuestbookScreen({
   onNavigate,
 }: {
   event: EventSettings
-  onNavigate?: (view: "upload" | "gallery" | "guestbook") => void
+  onNavigate?: (view: "landing" | "upload" | "gallery" | "guestbook") => void
 }) {
   const [activeNav, setActiveNav] = useState<NavItem>("guestbook")
   const [entries, setEntries] = useState<GuestbookEntry[]>([])
@@ -90,7 +90,27 @@ export default function GuestbookScreen({
           zIndex: 40,
         }}
       >
-        <div style={{ maxWidth: 680, margin: "0 auto", display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ maxWidth: 680, margin: "0 auto", display: "flex", alignItems: "center", gap: 10 }}>
+          <button
+            onClick={() => onNavigate?.("landing")}
+            aria-label="Kembali ke Beranda"
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              padding: 6,
+              marginLeft: -6,
+              color: "var(--color-ink-700)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: "var(--radius-sm)",
+            }}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+          </button>
           <div style={{ flex: 1 }}>
             <p style={{ margin: 0, fontSize: "var(--text-h3-size)", fontWeight: "var(--text-h3-w)", color: "var(--color-ink-900)", lineHeight: 1.2 }}>
               Ucapan

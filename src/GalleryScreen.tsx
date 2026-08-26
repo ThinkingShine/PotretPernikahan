@@ -15,6 +15,7 @@ import {
   type EventSettings,
   type MediaItem,
 } from "./lib/api"
+import { useHeicImage } from "./lib/useHeicImage"
 
 type NavItem = "upload" | "gallery" | "guestbook"
 type Filter = "semua" | "foto" | "video"
@@ -24,7 +25,7 @@ export default function GalleryScreen({
   onNavigate,
 }: {
   event: EventSettings
-  onNavigate?: (view: "upload" | "gallery" | "guestbook") => void
+  onNavigate?: (view: "landing" | "upload" | "gallery" | "guestbook") => void
 }) {
   const [activeNav, setActiveNav] = useState<NavItem>("gallery")
   const [filter, setFilter] = useState<Filter>("semua")
@@ -72,7 +73,27 @@ export default function GalleryScreen({
       {/* ── Sticky header ── */}
       <header style={{ backgroundColor: "var(--color-surface)", borderBottom: "1px solid var(--color-ink-300)", padding: "14px var(--space-screen-edge)", position: "sticky", top: 0, zIndex: 40 }}>
         <div style={{ maxWidth: 1120, margin: "0 auto" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+            <button
+              onClick={() => onNavigate?.("landing")}
+              aria-label="Kembali ke Beranda"
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                padding: 6,
+                marginLeft: -6,
+                color: "var(--color-ink-700)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                borderRadius: "var(--radius-sm)",
+              }}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
+            </button>
             <div style={{ width: 28, height: 28, borderRadius: "var(--radius-full)", backgroundColor: "var(--color-primary-100)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary-600)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>
@@ -194,48 +215,7 @@ function MediaTile({
   onClick: () => void
 }) {
   const [loaded, setLoaded] = useState(false)
-  const [heicBlobUrl, setHeicBlobUrl] = useState<string | null>(null)
-  const isHeic =
-    !item.isVideo &&
-    (item.url.toLowerCase().includes(".heic") ||
-      (item.blobPathname && item.blobPathname.toLowerCase().includes(".heic")) ||
-      (item.downloadName && item.downloadName.toLowerCase().includes(".heic")))
-
-  useEffect(() => {
-    if (!isHeic) return
-    let active = true
-    let blobUrl: string | null = null
-
-    async function decodeHeic() {
-      try {
-        const res = await fetch(item.url)
-        const blob = await res.blob()
-        const heic2anyModule = await import("heic2any")
-        const heic2any = (heic2anyModule as any).default || heic2anyModule
-        const converted = await heic2any({
-          blob,
-          toType: "image/jpeg",
-          quality: 0.85,
-        })
-        const finalBlob = Array.isArray(converted) ? converted[0] : converted
-        blobUrl = URL.createObjectURL(finalBlob)
-        if (active) {
-          setHeicBlobUrl(blobUrl)
-          setLoaded(true)
-        }
-      } catch (err) {
-        console.warn("HEIC render fallback:", err)
-      }
-    }
-
-    decodeHeic()
-    return () => {
-      active = false
-      if (blobUrl) URL.revokeObjectURL(blobUrl)
-    }
-  }, [isHeic, item.url])
-
-  const displaySrc = isHeic ? heicBlobUrl || item.url : item.url
+  const displaySrc = useHeicImage(item)
 
   return (
     <div style={{ breakInside: "avoid", marginBottom: 8 }}>
@@ -366,53 +346,13 @@ function Lightbox({
 }) {
   const item = items[index]
   const [imgLoaded, setImgLoaded] = useState(false)
-  const [heicBlobUrl, setHeicBlobUrl] = useState<string | null>(null)
   const touchStartX = useRef<number | null>(null)
+  const displaySrc = useHeicImage(item)
 
-  const isHeic =
-    !item?.isVideo &&
-    item?.url &&
-    (item.url.toLowerCase().includes(".heic") ||
-      (item.blobPathname && item.blobPathname.toLowerCase().includes(".heic")) ||
-      (item.downloadName && item.downloadName.toLowerCase().includes(".heic")))
-
-  // Reset loaded state on index change & decode HEIC if needed
+  // Reset loaded state on index change
   useEffect(() => {
     setImgLoaded(false)
-    setHeicBlobUrl(null)
-    if (!isHeic || !item) return
-
-    let active = true
-    let blobUrl: string | null = null
-
-    async function decodeLightboxHeic() {
-      try {
-        const res = await fetch(item.url)
-        const blob = await res.blob()
-        const heic2anyModule = await import("heic2any")
-        const heic2any = (heic2anyModule as any).default || heic2anyModule
-        const converted = await heic2any({
-          blob,
-          toType: "image/jpeg",
-          quality: 0.9,
-        })
-        const finalBlob = Array.isArray(converted) ? converted[0] : converted
-        blobUrl = URL.createObjectURL(finalBlob)
-        if (active) {
-          setHeicBlobUrl(blobUrl)
-          setImgLoaded(true)
-        }
-      } catch (err) {
-        console.warn("Lightbox HEIC decode failed:", err)
-      }
-    }
-
-    decodeLightboxHeic()
-    return () => {
-      active = false
-      if (blobUrl) URL.revokeObjectURL(blobUrl)
-    }
-  }, [index, isHeic, item])
+  }, [index])
 
   // Keyboard nav
   useEffect(() => {
@@ -551,7 +491,7 @@ function Lightbox({
             />
           ) : (
             <img
-              src={isHeic ? heicBlobUrl || item.url : item.url}
+              src={displaySrc}
               alt={item.uploader ? `Foto dari ${item.uploader}` : "Foto tamu"}
               onLoad={() => setImgLoaded(true)}
               style={{

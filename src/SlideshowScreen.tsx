@@ -5,6 +5,7 @@ import {
   type MediaItem,
   type SlideshowSettings,
 } from "./lib/api"
+import { useHeicImage } from "./lib/useHeicImage"
 
 const REFRESH_MS = 30000
 
@@ -173,25 +174,12 @@ export default function SlideshowScreen() {
               animation: "slideFade 700ms var(--ease-enter) both",
             }}
           >
-            {current?.isVideo ? (
-              <video
-                ref={videoRef}
-                src={current.url}
-                autoPlay
-                muted
-                playsInline
-                onEnded={advance}
-                onError={advance}
-                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
-              />
-            ) : (
-              <img
-                src={current?.url}
-                alt={current?.uploader ? `Foto dari ${current.uploader}` : "Foto tamu"}
-                onError={advance}
-                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
-              />
-            )}
+            <SlideMedia
+              current={current}
+              videoRef={videoRef}
+              onEnded={advance}
+              onError={advance}
+            />
           </div>
 
           {/* Uploader credit */}
@@ -335,5 +323,44 @@ function ChromeButton({
     >
       {children}
     </button>
+  )
+}
+
+function SlideMedia({
+  current,
+  videoRef,
+  onEnded,
+  onError,
+}: {
+  current?: MediaItem
+  videoRef: React.RefObject<HTMLVideoElement | null>
+  onEnded: () => void
+  onError: () => void
+}) {
+  const displayUrl = useHeicImage(current)
+  if (!current) return null
+
+  if (current.isVideo) {
+    return (
+      <video
+        ref={videoRef}
+        src={current.url}
+        autoPlay
+        muted
+        playsInline
+        onEnded={onEnded}
+        onError={onError}
+        style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
+      />
+    )
+  }
+
+  return (
+    <img
+      src={displayUrl}
+      alt={current.uploader ? `Foto dari ${current.uploader}` : "Foto tamu"}
+      onError={onError}
+      style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
+    />
   )
 }
