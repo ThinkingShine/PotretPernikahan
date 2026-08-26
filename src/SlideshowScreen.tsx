@@ -105,6 +105,16 @@ export default function SlideshowScreen() {
     return () => window.removeEventListener("keydown", onKey)
   }, [advance, items.length, wakeChrome])
 
+  // Preload the next image so transitions are instant with zero black flash
+  useEffect(() => {
+    if (items.length <= 1) return
+    const nextItem = items[(index + 1) % items.length]
+    if (nextItem && !nextItem.isVideo && nextItem.url) {
+      const preloadImg = new Image()
+      preloadImg.src = nextItem.url
+    }
+  }, [index, items])
+
   function toggleFullscreen() {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
     else document.documentElement.requestFullscreen().catch(() => {})

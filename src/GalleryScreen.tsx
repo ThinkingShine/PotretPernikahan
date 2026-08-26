@@ -233,6 +233,7 @@ function MediaTile({
             src={item.url}
             alt={item.uploader ? `Foto dari ${item.uploader}` : "Foto tamu"}
             loading="lazy"
+            decoding="async"
             onLoad={() => setLoaded(true)}
             style={{
               display: "block",

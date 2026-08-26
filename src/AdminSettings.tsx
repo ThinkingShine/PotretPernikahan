@@ -8,6 +8,7 @@ import {
   getAdminPasscode,
   type EventSettings,
 } from "./lib/api"
+import { optimizeImage } from "./lib/imageOptimizer"
 
 /* ─────────────────────────────────────────
    EVENT + SLIDESHOW SETTINGS
@@ -75,7 +76,8 @@ export function EventSettingsForm({
     setFormError(null)
     setMessage(null)
     try {
-      const next = await adminUploadCover(file)
+      const optimized = await optimizeImage(file, { maxDimension: 2560, quality: 0.85 })
+      const next = await adminUploadCover(optimized)
       onSaved(next)
       setMessage("Foto sampul diperbarui.")
     } catch (err) {
