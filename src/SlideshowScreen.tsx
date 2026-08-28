@@ -5,6 +5,7 @@ import {
   type MediaItem,
   type SlideshowSettings,
 } from "./lib/api"
+import { useHeicImage } from "./lib/useHeicImage"
 
 const REFRESH_MS = 30000
 
@@ -105,6 +106,16 @@ export default function SlideshowScreen() {
     return () => window.removeEventListener("keydown", onKey)
   }, [advance, items.length, wakeChrome])
 
+  // Preload the next image so transitions are instant with zero black flash
+  useEffect(() => {
+    if (items.length <= 1) return
+    const nextItem = items[(index + 1) % items.length]
+    if (nextItem && !nextItem.isVideo && nextItem.url) {
+      const preloadImg = new Image()
+      preloadImg.src = nextItem.url
+    }
+  }, [index, items])
+
   function toggleFullscreen() {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
     else document.documentElement.requestFullscreen().catch(() => {})
@@ -163,25 +174,12 @@ export default function SlideshowScreen() {
               animation: "slideFade 700ms var(--ease-enter) both",
             }}
           >
-            {current?.isVideo ? (
-              <video
-                ref={videoRef}
-                src={current.url}
-                autoPlay
-                muted
-                playsInline
-                onEnded={advance}
-                onError={advance}
-                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
-              />
-            ) : (
-              <img
-                src={current?.url}
-                alt={current?.uploader ? `Foto dari ${current.uploader}` : "Foto tamu"}
-                onError={advance}
-                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
-              />
-            )}
+            <SlideMedia
+              current={current}
+              videoRef={videoRef}
+              onEnded={advance}
+              onError={advance}
+            />
           </div>
 
           {/* Uploader credit */}
@@ -325,5 +323,44 @@ function ChromeButton({
     >
       {children}
     </button>
+  )
+}
+
+function SlideMedia({
+  current,
+  videoRef,
+  onEnded,
+  onError,
+}: {
+  current?: MediaItem
+  videoRef: React.RefObject<HTMLVideoElement | null>
+  onEnded: () => void
+  onError: () => void
+}) {
+  const displayUrl = useHeicImage(current)
+  if (!current) return null
+
+  if (current.isVideo) {
+    return (
+      <video
+        ref={videoRef}
+        src={current.url}
+        autoPlay
+        muted
+        playsInline
+        onEnded={onEnded}
+        onError={onError}
+        style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
+      />
+    )
+  }
+
+  return (
+    <img
+      src={displayUrl}
+      alt={current.uploader ? `Foto dari ${current.uploader}` : "Foto tamu"}
+      onError={onError}
+      style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
+    />
   )
 }

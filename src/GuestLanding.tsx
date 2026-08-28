@@ -10,6 +10,7 @@ import {
   type EventSettings,
   type MediaItem,
 } from "./lib/api"
+import { useHeicImage } from "./lib/useHeicImage"
 
 type NavItem = "upload" | "gallery" | "guestbook"
 
@@ -227,43 +228,11 @@ export default function GuestLanding({
                   </div>
                 ))
               : media.map(item => (
-                  <button
+                  <GuestThumbnailTile
                     key={item.id}
-                    aria-label={
-                      item.uploader ? `Foto dari ${item.uploader}` : "Foto tamu"
-                    }
+                    item={item}
                     onClick={() => onNavigate?.("gallery")}
-                    style={{
-                      padding: 0,
-                      border: "none",
-                      background: "var(--color-ink-100)",
-                      borderRadius: "var(--radius-lg)",
-                      overflow: "hidden",
-                      cursor: "pointer",
-                      aspectRatio: "1 / 1",
-                      display: "block",
-                      width: "100%",
-                    }}
-                    onMouseEnter={e =>
-                      ((e.currentTarget as HTMLButtonElement).style.opacity = "0.88")
-                    }
-                    onMouseLeave={e =>
-                      ((e.currentTarget as HTMLButtonElement).style.opacity = "1")
-                    }
-                  >
-                    <img
-                      src={item.url}
-                      alt={item.uploader ? `Foto dari ${item.uploader}` : "Foto tamu"}
-                      loading="lazy"
-                      style={{
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "cover",
-                        display: "block",
-                        transition: "opacity var(--duration-fast) var(--ease-standard)",
-                      }}
-                    />
-                  </button>
+                  />
                 ))}
           </div>
 
@@ -462,5 +431,75 @@ function PenIcon() {
       <path d="M12 20h9" />
       <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
     </svg>
+  )
+}
+
+function GuestThumbnailTile({
+  item,
+  onClick,
+}: {
+  item: MediaItem
+  onClick?: () => void
+}) {
+  const [loaded, setLoaded] = useState(false)
+  const displayUrl = useHeicImage(item)
+
+  return (
+    <button
+      aria-label={item.uploader ? `Foto dari ${item.uploader}` : "Foto tamu"}
+      onClick={onClick}
+      style={{
+        padding: 0,
+        border: "none",
+        background: "var(--color-ink-100)",
+        borderRadius: "var(--radius-lg)",
+        overflow: "hidden",
+        cursor: "pointer",
+        aspectRatio: "1 / 1",
+        display: "block",
+        width: "100%",
+        position: "relative",
+      }}
+      onMouseEnter={e =>
+        ((e.currentTarget as HTMLButtonElement).style.opacity = "0.88")
+      }
+      onMouseLeave={e =>
+        ((e.currentTarget as HTMLButtonElement).style.opacity = "1")
+      }
+    >
+      {item.isVideo ? (
+        <video
+          src={item.url}
+          muted
+          playsInline
+          preload="metadata"
+          onLoadedMetadata={() => setLoaded(true)}
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            display: "block",
+            opacity: loaded ? 1 : 0,
+            transition: "opacity var(--duration-fast) var(--ease-standard)",
+          }}
+        />
+      ) : (
+        <img
+          src={displayUrl}
+          alt={item.uploader ? `Foto dari ${item.uploader}` : "Foto tamu"}
+          loading="lazy"
+          decoding="async"
+          onLoad={() => setLoaded(true)}
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            display: "block",
+            opacity: loaded ? 1 : 0,
+            transition: "opacity var(--duration-fast) var(--ease-standard)",
+          }}
+        />
+      )}
+    </button>
   )
 }

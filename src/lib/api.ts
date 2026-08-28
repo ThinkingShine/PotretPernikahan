@@ -11,10 +11,12 @@ const BASE = (import.meta.env.VITE_API_BASE_URL ?? "/api").replace(/\/+$/, "")
 export interface MediaItem {
   id: string
   url: string
-  /** Location inside the Vercel Blob store. */
+  /** Location inside the storage bucket. */
   blobPathname?: string
   /** Serves the same bytes as `url` but as an attachment. */
   downloadUrl?: string
+  downloadName?: string
+  sizeBytes?: number
   uploader: string | null
   isVideo: boolean
   approved?: boolean

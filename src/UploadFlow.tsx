@@ -3,6 +3,7 @@ import { Button } from "./components/Button"
 import { Input } from "./components/Input"
 import { BottomNav } from "./components/BottomNav"
 import { uploadMedia, type EventSettings } from "./lib/api"
+import { optimizeImage, isHeic } from "./lib/imageOptimizer"
 
 type NavItem = "upload" | "gallery" | "guestbook"
 type Step = "pick" | "review" | "done"
@@ -21,6 +22,7 @@ interface UploadFile {
   status: FileStatus
   progress: number
   errorMsg?: string
+  isOptimized?: boolean
 }
 
 function formatSize(bytes: number): string {
@@ -54,7 +56,7 @@ export default function UploadFlow({
   onNavigate,
 }: {
   event: EventSettings
-  onNavigate?: (view: "upload" | "gallery" | "guestbook") => void
+  onNavigate?: (view: "landing" | "upload" | "gallery" | "guestbook") => void
 }) {
   const [step, setStep] = useState<Step>("pick")
   const [files, setFiles] = useState<UploadFile[]>([])
@@ -94,11 +96,36 @@ export default function UploadFlow({
       : uploadableFiles.reduce((sum, f) => sum + f.progress, 0) /
         uploadableFiles.length
 
-  function addFiles(list: FileList | null) {
+  async function addFiles(list: FileList | null) {
     if (!list || list.length === 0) return
     const picked = Array.from(list).map(toUploadFile)
     setFiles(prev => [...prev, ...picked])
     setStep("review")
+
+    // Optimize images and convert HEIC asynchronously in background
+    for (const item of picked) {
+      if (item.status === "rejected") continue
+      const isVideo = item.file.type.startsWith("video/")
+      if (isVideo) continue
+
+      try {
+        const optimized = await optimizeImage(item.file)
+        if (optimized) {
+          const newThumb = URL.createObjectURL(optimized)
+          updateFile(item.id, {
+            file: optimized,
+            name: optimized.name,
+            size: `${formatSize(optimized.size)} (HD)`,
+            sizeBytes: optimized.size,
+            thumb: newThumb,
+            isOptimized: true,
+          })
+          URL.revokeObjectURL(item.thumb)
+        }
+      } catch (err) {
+        console.warn("Optimasi latar belakang gagal:", err)
+      }
+    }
   }
 
   function updateFile(id: string, patch: Partial<UploadFile>) {
@@ -120,14 +147,20 @@ export default function UploadFlow({
   }
 
   function goBack() {
-    if (step === "pick") onNavigate?.("gallery")
+    if (step === "pick") onNavigate?.("landing")
     else setStep("pick")
   }
 
   async function uploadOne(item: UploadFile): Promise<boolean> {
     updateFile(item.id, { status: "uploading", progress: 0, errorMsg: undefined })
     try {
-      await uploadMedia(item.file, guestName, percent =>
+      let fileToUpload = item.file
+      const isVideo = fileToUpload.type.startsWith("video/")
+      if (!isVideo && !item.isOptimized && (isHeic(fileToUpload) || fileToUpload.size > 1024 * 1024)) {
+        fileToUpload = await optimizeImage(fileToUpload)
+      }
+
+      await uploadMedia(fileToUpload, guestName, percent =>
         updateFile(item.id, { progress: percent }),
       )
       updateFile(item.id, { status: "done", progress: 100 })
@@ -157,7 +190,13 @@ export default function UploadFlow({
     }
     setSending(false)
     setUploadedCount(ok)
-    if (ok > 0) setStep("done")
+    if (ok > 0) {
+      setStep("done")
+      // Automatically redirect to gallery so the user immediately sees the uploaded photos
+      setTimeout(() => {
+        onNavigate?.("gallery")
+      }, 700)
+    }
   }
 
   function resetFlow() {
@@ -298,7 +337,7 @@ export default function UploadFlow({
         ref={fileInputRef}
         type="file"
         multiple
-        accept="image/jpeg,image/png,image/heic,image/webp,video/mp4,video/quicktime,video/webm"
+        accept="image/jpeg,image/png,image/heic,image/heif,image/webp,video/mp4,video/quicktime,video/webm,.heic,.heif"
         style={{ display: "none" }}
         onChange={e => {
           addFiles(e.target.files)
